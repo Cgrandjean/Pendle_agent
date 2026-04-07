@@ -16,7 +16,7 @@ from utils.database import (
     get_spike_config, set_setting,
     reset_db, export_db_summary,
 )
-from utils.formatting import fmt_pct
+from utils.formatting import fmt_pct, format_candidate
 
 log = logging.getLogger(__name__)
 
@@ -241,11 +241,44 @@ async def loop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command."""
+    """Handle /status command - shows cached results from last scan."""
     if not _is_authorized(update.effective_chat.id):
         return
-    query = " ".join(context.args) if context.args else DEFAULT_REPORT_QUERY
-    await _run_query(update, query, header="📊 *Status Report*\n")
+    
+    candidates = get_last_scan_candidates()
+    if not candidates:
+        await update.message.reply_text(
+            "📊 *Status Report*\n\n"
+            "No cached data. Run `/loop` to trigger a scan first.",
+            parse_mode="Markdown",
+        )
+        return
+    
+    # Sort by theoretical yield and take top 10
+    candidates.sort(key=lambda c: c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0, reverse=True)
+    top = candidates[:10]
+    
+    # Get last scan info
+    from utils.database import export_db_summary
+    summary = export_db_summary()
+    last_scan = summary.get("last_scan", {})
+    ts = last_scan.get("ts", "?")
+    query = last_scan.get("query", "?")
+    
+    lines = [f"📊 *Status Report* — _cached from {ts}_\n"]
+    lines.append(f"_Query: `{query}`_\n")
+    lines.append(f"_Showing top {len(top)} of {len(candidates)} candidates:_\n")
+    
+    for i, c in enumerate(top, 1):
+        lines.append(format_candidate(i, c))
+    
+    lines.append("\n⚠️ *Disclaimer* — Rendements théoriques estimés. Vérifiez LTV/borrow réels. Bot read-only. DYOR.")
+    
+    msg = "\n".join(lines)
+    if len(msg) <= MSG_MAX_LENGTH:
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    else:
+        await _send_chunks(context.bot, update.effective_chat.id, msg)
 
 
 async def alert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
