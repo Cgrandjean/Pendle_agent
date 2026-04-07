@@ -229,7 +229,7 @@ class LoopScoutAgent:
                 return best
 
         if pid in ("aave", "aavev3"):
-            stables = ["USDC", "USDT", "DAI", "USDE", "GHO", "PYUSD"] if asset_family == "stable" else ["USDC", "USDT"]
+            stables = ["USDC", "USDT", "USDS", "USDE", "GHO", "PYUSD"] if asset_family == "stable" else ["USDC", "USDT"]
             best = None
             for e in lookup["aave"]:
                 if e["sym"] in stables and e["rate"] > 0:

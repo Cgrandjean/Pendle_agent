@@ -71,7 +71,7 @@ def fetch_euler_data(min_cash_or_borrows: float = 100) -> dict[str, Any]:
         vaults = result.get("data", {}).get("eulerVaults", [])
         logger.info("Euler: fetched %d vaults total", len(vaults))
 
-        stable_kw = ["usdc", "usdt", "dai", "usde", "pyusd", "gho"]
+        stable_kw = ["usdc", "usdt", "usds", "usde", "pyusd", "gho"]
 
         for v in vaults:
             symbol = v.get("symbol", "")

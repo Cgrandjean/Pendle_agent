@@ -111,7 +111,7 @@ def fetch_aave_data(chain_ids: list[int] | None = None) -> dict[str, Any]:
                         "is_paused": r.get("isPaused", False),
                     }
 
-                if sym in ("USDC", "USDT", "DAI", "GHO", "USDE", "PYUSD"):
+                if sym in ("USDC", "USDT", "USDS", "GHO", "USDE", "PYUSD"):
                     borrow_apy_obj = bi.get("apy") or {}
                     borrow_apy = float(borrow_apy_obj.get("value") or 0) if isinstance(borrow_apy_obj, dict) else 0
                     avail_obj = bi.get("availableLiquidity") or {}
