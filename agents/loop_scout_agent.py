@@ -266,62 +266,91 @@ class LoopScoutAgent:
             family = detect_asset_family(name)
 
             # Default leverage/LTV by asset type
-            leverage, ltv = {"stable": (10, 0.90), "eth": (5, 0.80), "btc": (3, 0.75)}.get(family, (3, 0.70))
+            default_leverage, default_ltv = {"stable": (10, 0.90), "eth": (5, 0.80), "btc": (3, 0.75)}.get(family, (3, 0.70))
 
-            # Find real borrow rates
-            paths = []
-            best_borrow = None
+            # Build per-vault candidates
+            vault_candidates = []
             for mm in mms:
                 pid = mm.get("id", "")
                 rate, real_ltv, detail = self._best_borrow(name, family, pid, lookup)
-                paths.append({
-                    "protocol": mm.get("name", ""), "protocol_id": pid,
-                    "category": mm.get("category", ""), "url": mm.get("url", ""),
-                    "type": "PT collateral → borrow → re-buy PT",
-                    "real_borrow_apy": rate, "real_ltv": real_ltv, "borrow_detail": detail,
+                
+                if rate <= 0:
+                    continue
+                    
+                # Calculate leverage and yield for this specific vault
+                ltv = real_ltv if real_ltv > 0 else default_ltv
+                leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
+                net = implied - rate
+                theo_yield = implied + max(net, 0) * (leverage - 1)
+                
+                vault_candidates.append({
+                    "vault_name": mm.get("name", ""),
+                    "vault_id": pid,
+                    "borrow_apy": rate,
+                    "ltv": ltv,
+                    "leverage": leverage,
+                    "theoretical_max_yield": theo_yield,
+                    "borrow_detail": detail,
                 })
-                if rate > 0 and (best_borrow is None or rate < best_borrow):
-                    best_borrow = rate
-                    if real_ltv > 0:
-                        ltv = real_ltv
-                        leverage = int(1 / (1 - real_ltv)) if real_ltv < 1 else 10
 
+            # Add Contango as a separate option
             if has_contango:
                 ct = next((p for p in protos if p.get("id") == "contango"), {})
-                paths.append({
-                    "protocol": "Contango", "protocol_id": "contango",
-                    "category": "yield strategy", "url": ct.get("url", "https://app.contango.xyz/"),
-                    "type": "Automated loop via flash loan",
+                vault_candidates.append({
+                    "vault_name": "Contango",
+                    "vault_id": "contango",
+                    "borrow_apy": 0,
+                    "ltv": 0,
+                    "leverage": 0,
+                    "theoretical_max_yield": implied,  # No leverage, just implied
+                    "borrow_detail": "Automated loop",
                 })
 
-            borrow_cost = best_borrow if best_borrow is not None else underlying
-            net = implied - borrow_cost
-            theo_yield = implied + max(net, 0) * (leverage - 1)
+            if not vault_candidates:
+                continue
 
-            sc = score_candidate(implied, spread, tvl, liq, days, len(mms), has_contango)
+            # Sort vault candidates by theoretical yield
+            vault_candidates.sort(key=lambda v: v["theoretical_max_yield"], reverse=True)
 
-            candidates.append({
-                "address": m.get("address", ""), "chain_id": m.get("chainId"),
-                "name": name, "symbol": m.get("symbol", ""), "protocol": m.get("protocol", ""),
-                "expiry": m.get("expiry"), "days_to_expiry": round(days, 1),
-                "implied_apy": implied, "underlying_apy": underlying,
-                "spread": spread, "pt_discount": discount,
-                "tvl": tvl, "liquidity": liq,
-                "yt_floating_apy": float(m.get("details_ytFloatingApy") or 0),
-                "aggregated_apy": float(m.get("details_aggregatedApy") or 0),
-                "pendle_apy": float(m.get("details_pendleApy") or 0),
-                "max_boosted_apy": float(m.get("details_maxBoostedApy") or 0),
-                "asset_family": family,
-                "estimated_max_leverage": leverage, "estimated_ltv": ltv,
-                "borrow_cost_estimate": borrow_cost, "theoretical_max_yield": theo_yield,
-                "money_markets": [p.get("name", "") for p in mms],
-                "yield_strategies": [p.get("name", "") for p in ys],
-                "has_contango": has_contango, "loop_paths": paths, "score": sc,
-            })
+            # Create one candidate per vault
+            for vc in vault_candidates:
+                sc = score_candidate(implied, spread, tvl, liq, days, len(mms), has_contango)
 
-        candidates.sort(key=lambda c: c["theoretical_max_yield"], reverse=True)
-        log.info("Found %d loop candidates", len(candidates))
-        return {"loop_candidates": candidates}
+                candidates.append({
+                    "address": m.get("address", ""), "chain_id": m.get("chainId"),
+                    "name": name, "symbol": m.get("symbol", ""), "protocol": m.get("protocol", ""),
+                    "expiry": m.get("expiry"), "days_to_expiry": round(days, 1),
+                    "implied_apy": implied, "underlying_apy": underlying,
+                    "spread": spread, "pt_discount": discount,
+                    "tvl": tvl, "liquidity": liq,
+                    "yt_floating_apy": float(m.get("details_ytFloatingApy") or 0),
+                    "aggregated_apy": float(m.get("details_aggregatedApy") or 0),
+                    "pendle_apy": float(m.get("details_pendleApy") or 0),
+                    "max_boosted_apy": float(m.get("details_maxBoostedApy") or 0),
+                    "asset_family": family,
+                    "estimated_max_leverage": vc["leverage"], "estimated_ltv": vc["ltv"],
+                    "borrow_cost_estimate": vc["borrow_apy"], "theoretical_max_yield": vc["theoretical_max_yield"],
+                    "vault_name": vc["vault_name"], "vault_id": vc["vault_id"],
+                    "borrow_detail": vc["borrow_detail"],
+                    "money_markets": [p.get("name", "") for p in mms],
+                    "yield_strategies": [p.get("name", "") for p in ys],
+                    "has_contango": has_contango, "score": sc,
+                    # Keep all vaults for display
+                    "all_vaults": vault_candidates,
+                })
+
+        # Deduplicate: keep only the best vault candidate per unique (name, chain) combo
+        seen = {}
+        deduped = []
+        for c in candidates:
+            key = f"{c['name']}_{c['chain_id']}_{c['vault_id']}"
+            if key not in seen:
+                seen[key] = True
+                deduped.append(c)
+        
+        deduped.sort(key=lambda c: c["theoretical_max_yield"], reverse=True)
+        log.info("Found %d loop candidates", len(deduped))
+        return {"loop_candidates": deduped}
 
     # -- Synthesize output --
 

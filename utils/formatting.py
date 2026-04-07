@@ -31,6 +31,8 @@ def format_candidate(rank, c):
     chain = CHAIN_NAMES.get(c.get("chain_id", 0), "?")
     name = c.get("name") or c.get("symbol") or "?"
     proto = c.get("protocol") or ""
+    vault_name = c.get("vault_name", "")
+    borrow_detail = c.get("borrow_detail", "")
 
     lines = [
         f"*{rank}. {name}*",
@@ -41,13 +43,34 @@ def format_candidate(rank, c):
         f"   ⏰ {c.get('days_to_expiry', '?')}d remaining",
     ]
 
-    for lp in c.get("loop_paths", []):
-        lines.append(f"   🔁 {lp.get('protocol','?')} — {lp.get('type','')}")
+    # Show vault-specific info
+    if vault_name:
+        lines.append(f"   🔁 Vault: {vault_name}")
+        if borrow_detail and borrow_detail != "Automated loop":
+            lines.append(f"   💵 {borrow_detail}")
 
-    lev = c.get("estimated_max_leverage", 1)
+    lev = c.get("estimated_max_leverage", 0)
     theo = c.get("theoretical_max_yield", 0)
     borrow = c.get("borrow_cost_estimate", 0)
-    lines.append(f"   🧮 {lev}x | Borrow: {fmt_pct(borrow)} | Theo yield: {fmt_pct(theo)}")
+    
+    if lev > 0:
+        lines.append(f"   🧮 {lev}x | Borrow: {fmt_pct(borrow)} | Theo yield: {fmt_pct(theo)}")
+    else:
+        lines.append(f"   🧮 Theo yield: {fmt_pct(theo)} (no leverage)")
+
+    # Show other available vaults
+    all_vaults = c.get("all_vaults", [])
+    if len(all_vaults) > 1:
+        lines.append(f"   📋 Other vaults:")
+        for v in all_vaults:
+            if v["vault_id"] != c.get("vault_id"):
+                v_lev = v.get("leverage", 0)
+                v_yield = v.get("theoretical_max_yield", 0)
+                v_name = v.get("vault_name", "?")
+                if v_lev > 0:
+                    lines.append(f"     • {v_name}: {v_lev}x → {fmt_pct(v_yield)}")
+                else:
+                    lines.append(f"     • {v_name}: {fmt_pct(v_yield)}")
 
     mms = c.get("money_markets", [])
     if mms:
