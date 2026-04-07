@@ -1,0 +1,251 @@
+"""SQLite persistence for scans, alerts, and yield history."""
+
+import json
+import logging
+import os
+import sqlite3
+from datetime import datetime, timezone
+
+from agents.config import DB_PATH
+
+log = logging.getLogger(__name__)
+_conn = None
+
+
+def _db():
+    global _conn
+    if not _conn:
+        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        _conn.executescript("""
+            CREATE TABLE IF NOT EXISTS scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL, query TEXT, chain TEXT,
+                asset_filter TEXT, risk TEXT, total_candidates INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id INTEGER NOT NULL, name TEXT, address TEXT, chain_id INTEGER,
+                implied_apy REAL, underlying_apy REAL, spread REAL, borrow_cost REAL,
+                theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL, score REAL,
+                asset_family TEXT, money_markets TEXT, has_contango INTEGER DEFAULT 0,
+                loop_paths TEXT, FOREIGN KEY (scan_id) REFERENCES scans(id)
+            );
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL, asset_filter TEXT, chain TEXT,
+                min_spread REAL DEFAULT 0.03, min_yield REAL DEFAULT 0,
+                enabled INTEGER DEFAULT 1, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS yield_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
+                name TEXT, asset_family TEXT, implied_apy REAL,
+                theoretical_yield REAL, borrow_cost REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
+            CREATE INDEX IF NOT EXISTS idx_alerts_chat ON alerts(chat_id);
+            CREATE INDEX IF NOT EXISTS idx_scans_ts ON scans(ts);
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_yh_addr ON yield_history(address);
+            CREATE INDEX IF NOT EXISTS idx_yh_ts ON yield_history(ts);
+        """)
+        _conn.commit()
+    return _conn
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+# -- Scans --
+
+def save_scan(query, chain, asset_filter, candidates):
+    conn = _db()
+    cur = conn.execute(
+        "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",
+        (_now(), query, chain, asset_filter, len(candidates)))
+    sid = cur.lastrowid
+
+    for c in candidates:
+        conn.execute(
+            """INSERT INTO candidates
+               (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
+                borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
+                asset_family, money_markets, has_contango, loop_paths)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
+             c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
+             c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
+             c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
+             c.get("asset_family",""), json.dumps(c.get("money_markets",[])),
+             1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[]))))
+
+    conn.commit()
+    log.info("Scan #%d: %d candidates", sid, len(candidates))
+    return sid
+
+
+def get_last_scan_candidates(asset_filter=None, chain=None):
+    conn = _db()
+    where, params = [], []
+    if asset_filter:
+        where.append("s.asset_filter = ?"); params.append(asset_filter)
+    if chain:
+        where.append("s.chain = ?"); params.append(chain)
+
+    w = f"WHERE {' AND '.join(where)}" if where else ""
+    row = conn.execute(f"SELECT id FROM scans {w} ORDER BY ts DESC LIMIT 1", params).fetchone()
+    if not row:
+        return []
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC", (row["id"],)).fetchall()]
+
+
+def get_scan_count():
+    r = _db().execute("SELECT COUNT(*) as cnt FROM scans").fetchone()
+    return r["cnt"] if r else 0
+
+
+# -- Alerts --
+
+def add_alert(chat_id, asset_filter=None, chain=None, min_spread=0, min_yield=0.10):
+    conn = _db()
+    cur = conn.execute(
+        "INSERT INTO alerts (chat_id, asset_filter, chain, min_spread, min_yield, enabled, created_at) VALUES (?,?,?,?,?,1,?)",
+        (chat_id, asset_filter, chain, min_spread, min_yield, _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_alerts(chat_id=None, enabled_only=True):
+    conn = _db()
+    where, params = [], []
+    if chat_id is not None:
+        where.append("chat_id = ?"); params.append(chat_id)
+    if enabled_only:
+        where.append("enabled = 1")
+    w = f"WHERE {' AND '.join(where)}" if where else ""
+    return [dict(r) for r in conn.execute(f"SELECT * FROM alerts {w}", params).fetchall()]
+
+
+def delete_alert(alert_id, chat_id):
+    conn = _db()
+    cur = conn.execute("DELETE FROM alerts WHERE id = ? AND chat_id = ?", (alert_id, chat_id))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def check_alerts_for_candidates(candidates):
+    """Returns {chat_id: [matching candidates]}."""
+    alerts = get_alerts(enabled_only=True)
+    results = {}
+    for alert in alerts:
+        cid = alert["chat_id"]
+        matching = []
+        for c in candidates:
+            if alert.get("asset_filter") and c.get("asset_family") != alert["asset_filter"]:
+                continue
+            theo = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
+            if theo < alert.get("min_yield", 0):
+                continue
+            matching.append(c)
+        if matching:
+            results.setdefault(cid, []).extend(matching)
+    return results
+
+
+# -- Yield history & spike detection --
+
+def save_yield_history(candidates):
+    conn = _db()
+    now = _now()
+    for c in candidates:
+        addr = c.get("address", "")
+        if not addr:
+            continue
+        conn.execute(
+            "INSERT INTO yield_history (ts,address,chain_id,name,asset_family,implied_apy,theoretical_yield,borrow_cost) VALUES (?,?,?,?,?,?,?,?)",
+            (now, addr, c.get("chain_id"), c.get("name",""), c.get("asset_family",""),
+             c.get("implied_apy",0),
+             c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0,
+             c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0))
+    conn.commit()
+
+
+# -- Settings --
+
+def get_setting(key, default=None):
+    row = _db().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    conn = _db()
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+        (key, str(value), str(value)))
+    conn.commit()
+
+
+def get_spike_config():
+    from agents.config import SPIKE_WINDOW, SPIKE_MULTIPLIER, SPIKE_MIN_YIELD
+    return {
+        "window": int(get_setting("spike_window", SPIKE_WINDOW)),
+        "multiplier": float(get_setting("spike_multiplier", SPIKE_MULTIPLIER)),
+        "min_yield": float(get_setting("spike_min_yield", SPIKE_MIN_YIELD)),
+    }
+
+
+def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None):
+    """Compare current yield to SMA. Returns spikes sorted by ratio."""
+    cfg = get_spike_config()
+    if window is None:
+        window = cfg["window"]
+    if multiplier is None:
+        multiplier = cfg["multiplier"]
+    if min_yield is None:
+        min_yield = cfg["min_yield"]
+
+    conn = _db()
+    spikes = []
+
+    for c in candidates:
+        addr = c.get("address", "")
+        if not addr:
+            continue
+        cur = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
+        if cur < min_yield:
+            continue
+
+        rows = conn.execute(
+            "SELECT theoretical_yield FROM yield_history WHERE address = ? ORDER BY ts DESC LIMIT ?",
+            (addr, window)).fetchall()
+
+        past = [r["theoretical_yield"] for r in rows if r["theoretical_yield"] and r["theoretical_yield"] > 0]
+        if len(past) < 3:
+            continue
+
+        sma = sum(past) / len(past)
+        if sma <= 0:
+            continue
+
+        ratio = cur / sma
+        if ratio >= multiplier:
+            spikes.append({
+                "name": c.get("name", "?"), "address": addr,
+                "chain_id": c.get("chain_id"), "asset_family": c.get("asset_family", ""),
+                "current_yield": cur, "sma_yield": sma, "spike_ratio": ratio,
+                "implied_apy": c.get("implied_apy", 0),
+                "borrow_cost": c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0,
+                "money_markets": c.get("money_markets", []),
+                "has_contango": c.get("has_contango", False),
+            })
+
+    spikes.sort(key=lambda s: s["spike_ratio"], reverse=True)
+    log.info("Spikes: %d (window=%d, ×%.1f)", len(spikes), window, multiplier)
+    return spikes
