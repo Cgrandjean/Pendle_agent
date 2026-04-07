@@ -237,6 +237,7 @@ def reset_db():
     if _conn:
         _conn.close()
         _conn = None
+    # Create a fresh connection and recreate all tables
     conn = _db()
     conn.executescript("""
         DROP TABLE IF EXISTS candidates;
@@ -244,9 +245,44 @@ def reset_db():
         DROP TABLE IF EXISTS alerts;
         DROP TABLE IF EXISTS yield_history;
         DROP TABLE IF EXISTS settings;
+        CREATE TABLE IF NOT EXISTS scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL, query TEXT, chain TEXT,
+            asset_filter TEXT, risk TEXT, total_candidates INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id INTEGER NOT NULL, name TEXT, address TEXT, chain_id INTEGER,
+            implied_apy REAL, underlying_apy REAL, spread REAL, borrow_cost REAL,
+            theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL, score REAL,
+            asset_family TEXT, money_markets TEXT, has_contango INTEGER DEFAULT 0,
+            loop_paths TEXT, vault_name TEXT, vault_id TEXT, borrow_detail TEXT,
+            FOREIGN KEY (scan_id) REFERENCES scans(id)
+        );
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL, asset_filter TEXT, chain TEXT,
+            min_spread REAL DEFAULT 0.03, min_yield REAL DEFAULT 0,
+            enabled INTEGER DEFAULT 1, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS yield_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
+            name TEXT, asset_family TEXT, implied_apy REAL,
+            theoretical_yield REAL, borrow_cost REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
+        CREATE INDEX IF NOT EXISTS idx_alerts_chat ON alerts(chat_id);
+        CREATE INDEX IF NOT EXISTS idx_scans_ts ON scans(ts);
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_yh_addr ON yield_history(address);
+        CREATE INDEX IF NOT EXISTS idx_yh_ts ON yield_history(ts);
     """)
     conn.commit()
-    log.info("Database reset")
+    log.info("Database reset - tables recreated")
     return True
 
 
