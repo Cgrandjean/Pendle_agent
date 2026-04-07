@@ -22,6 +22,7 @@ from telegram_bot.handlers import (
     spike_handler,
     export_handler,
     resetdb_handler,
+    clear_handler,
     scheduled_scan,
 )
 
@@ -55,6 +56,7 @@ def main() -> None:
     app.add_handler(CommandHandler("spike", spike_handler))
     app.add_handler(CommandHandler("export", export_handler))
     app.add_handler(CommandHandler("resetdb", resetdb_handler))
+    app.add_handler(CommandHandler("clear", clear_handler))
 
     # Silent scan every N minutes
     if ALLOWED_CHAT_IDS and SCAN_INTERVAL_MINUTES > 0:

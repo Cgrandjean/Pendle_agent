@@ -90,6 +90,8 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*🗄️ Database:*\n"
         "• `/export` — view database summary\n"
         "• `/resetdb` — reset database (use `/resetdb confirm`)\n\n"
+        "*🧹 Chat:*\n"
+        "• `/clear` — clear bot messages from chat (use `/clear confirm`)\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "*📐 How to read results:*\n"
         "• *Implied APY* — fixed rate of the PT\n"
@@ -301,6 +303,39 @@ async def resetdb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ *Database reset complete*\n\n"
         "The database has been recreated with the latest schema.\n"
         "Run `/status` to trigger a new scan.",
+        parse_mode="Markdown",
+    )
+
+
+async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if ALLOWED_CHAT_IDS and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+
+    args = context.args or []
+    if "confirm" not in args:
+        await update.message.reply_text(
+            "🧹 *Clear Chat*\n\n"
+            "This will delete all bot messages from this chat.\n"
+            "Note: Only messages < 48h old can be deleted in groups.\n"
+            "Type `/clear confirm` to proceed.",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text("🧹 Clearing chat...")
+    
+    # Get chat ID
+    chat_id = update.effective_chat.id
+    
+    # Try to delete the confirmation message itself
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    
+    await update.message.reply_text(
+        "✅ *Chat cleared*\n\n"
+        "Bot messages have been deleted. Some messages older than 48h may remain.",
         parse_mode="Markdown",
     )
 
