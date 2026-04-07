@@ -231,6 +231,55 @@ def get_spike_config():
     }
 
 
+def reset_db():
+    """Reset the database by deleting and recreating all tables."""
+    global _conn
+    if _conn:
+        _conn.close()
+        _conn = None
+    conn = _db()
+    conn.executescript("""
+        DROP TABLE IF EXISTS candidates;
+        DROP TABLE IF EXISTS scans;
+        DROP TABLE IF EXISTS alerts;
+        DROP TABLE IF EXISTS yield_history;
+        DROP TABLE IF EXISTS settings;
+    """)
+    conn.commit()
+    log.info("Database reset")
+    return True
+
+
+def export_db_summary():
+    """Export a summary of the database contents."""
+    conn = _db()
+    summary = {}
+    
+    # Scan count
+    r = conn.execute("SELECT COUNT(*) as cnt FROM scans").fetchone()
+    summary["total_scans"] = r["cnt"] if r else 0
+    
+    # Candidate count
+    r = conn.execute("SELECT COUNT(*) as cnt FROM candidates").fetchone()
+    summary["total_candidates"] = r["cnt"] if r else 0
+    
+    # Alert count
+    r = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE enabled = 1").fetchone()
+    summary["active_alerts"] = r["cnt"] if r else 0
+    
+    # Last scan details
+    row = conn.execute("SELECT * FROM scans ORDER BY ts DESC LIMIT 1").fetchone()
+    if row:
+        summary["last_scan"] = dict(row)
+        # Top 5 candidates from last scan
+        candidates = [dict(r) for r in conn.execute(
+            "SELECT name, theoretical_yield, vault_name, vault_id FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC LIMIT 5",
+            (row["id"],)).fetchall()]
+        summary["top_candidates"] = candidates
+    
+    return summary
+
+
 def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None):
     """Compare current yield to SMA. Returns spikes sorted by ratio."""
     cfg = get_spike_config()

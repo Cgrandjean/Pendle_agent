@@ -14,6 +14,7 @@ from utils.database import (
     check_alerts_for_candidates, get_scan_count,
     get_last_scan_candidates, detect_yield_spikes,
     get_spike_config, set_setting,
+    reset_db, export_db_summary,
 )
 from utils.formatting import fmt_pct
 
@@ -85,6 +86,10 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/spike window 10` — average over 10 scans (default: 30)\n"
         "• `/spike multiplier 2.0` — alert if ×2.0 (default: ×1.5)\n"
         "• `/spike min 0.10` — ignore yields < 10% (default: 5%)\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "*🗄️ Database:*\n"
+        "• `/export` — view database summary\n"
+        "• `/resetdb` — reset database (use `/resetdb confirm`)\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "*📐 How to read results:*\n"
         "• *Implied APY* — fixed rate of the PT\n"
@@ -244,6 +249,60 @@ async def delalert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Alert #{aid} deleted.")
     else:
         await update.message.reply_text(f"❌ Alert #{aid} not found.")
+
+
+async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if ALLOWED_CHAT_IDS and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+
+    summary = export_db_summary()
+    
+    lines = [
+        "📊 *Database Export*\n",
+        f"• Total scans: `{summary.get('total_scans', 0)}`",
+        f"• Total candidates: `{summary.get('total_candidates', 0)}`",
+        f"• Active alerts: `{summary.get('active_alerts', 0)}`",
+    ]
+    
+    last_scan = summary.get("last_scan")
+    if last_scan:
+        lines.append(f"\n🕒 *Last scan:* _{last_scan.get('ts', '?')}_")
+        lines.append(f"   Query: `{last_scan.get('query', '?')}`")
+        lines.append(f"   Candidates: `{last_scan.get('total_candidates', 0)}`")
+    
+    top = summary.get("top_candidates", [])
+    if top:
+        lines.append("\n🏆 *Top candidates:*")
+        for i, c in enumerate(top, 1):
+            vault = c.get("vault_name", "")
+            vault_info = f" ({vault})" if vault else ""
+            lines.append(f"   {i}. {c.get('name', '?')}{vault_info} — {fmt_pct(c.get('theoretical_yield', 0))}")
+    
+    msg = "\n".join(lines)
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+
+async def resetdb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if ALLOWED_CHAT_IDS and update.effective_chat.id not in ALLOWED_CHAT_IDS:
+        return
+
+    args = context.args or []
+    if "confirm" not in args:
+        await update.message.reply_text(
+            "⚠️ *Reset Database*\n\n"
+            "This will delete ALL data (scans, alerts, settings).\n"
+            "Type `/resetdb confirm` to proceed.",
+            parse_mode="Markdown",
+        )
+        return
+
+    reset_db()
+    await update.message.reply_text(
+        "✅ *Database reset complete*\n\n"
+        "The database has been recreated with the latest schema.\n"
+        "Run `/status` to trigger a new scan.",
+        parse_mode="Markdown",
+    )
 
 
 # -- Core --
