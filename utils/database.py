@@ -30,7 +30,8 @@ def _db():
                 implied_apy REAL, underlying_apy REAL, spread REAL, borrow_cost REAL,
                 theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL, score REAL,
                 asset_family TEXT, money_markets TEXT, has_contango INTEGER DEFAULT 0,
-                loop_paths TEXT, FOREIGN KEY (scan_id) REFERENCES scans(id)
+                loop_paths TEXT, vault_name TEXT, vault_id TEXT, borrow_detail TEXT,
+                FOREIGN KEY (scan_id) REFERENCES scans(id)
             );
             CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +67,20 @@ def _now():
 
 def save_scan(query, chain, asset_filter, candidates):
     conn = _db()
+    # Add vault columns if they exist in schema
+    try:
+        conn.execute("ALTER TABLE candidates ADD COLUMN vault_name TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE candidates ADD COLUMN vault_id TEXT")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE candidates ADD COLUMN borrow_detail TEXT")
+    except Exception:
+        pass
+    
     cur = conn.execute(
         "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",
         (_now(), query, chain, asset_filter, len(candidates)))
@@ -76,14 +91,16 @@ def save_scan(query, chain, asset_filter, candidates):
             """INSERT INTO candidates
                (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
                 borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
-                asset_family, money_markets, has_contango, loop_paths)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                asset_family, money_markets, has_contango, loop_paths,
+                vault_name, vault_id, borrow_detail)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
              c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
              c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
              c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
              c.get("asset_family",""), json.dumps(c.get("money_markets",[])),
-             1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[]))))
+             1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[])),
+             c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail","")))
 
     conn.commit()
     log.info("Scan #%d: %d candidates", sid, len(candidates))
