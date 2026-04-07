@@ -1,3 +1,13 @@
+---
+title: Pendle Loop Scout
+emoji: 🔄
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Pendle Loop Scout
 
 > **Telegram bot that detects the best loop opportunities on Pendle Finance**
