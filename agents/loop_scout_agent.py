@@ -265,8 +265,8 @@ class LoopScoutAgent:
             spread = implied - underlying
             family = detect_asset_family(name)
 
-            # Default leverage/LTV by asset type
-            default_leverage, default_ltv = {"stable": (10, 0.90), "eth": (5, 0.80), "btc": (3, 0.75)}.get(family, (3, 0.70))
+            # Default LTV by asset type
+            default_ltv = {"stable": 0.90, "eth": 0.80, "btc": 0.75}.get(family, 0.70)
 
             # Build per-vault candidates
             vault_candidates = []

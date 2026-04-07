@@ -324,9 +324,6 @@ async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("🧹 Clearing chat...")
     
-    # Get chat ID
-    chat_id = update.effective_chat.id
-    
     # Try to delete the confirmation message itself
     try:
         await msg.delete()
