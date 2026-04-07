@@ -102,8 +102,21 @@ def get_last_scan_candidates(asset_filter=None, chain=None):
     row = conn.execute(f"SELECT id FROM scans {w} ORDER BY ts DESC LIMIT 1", params).fetchone()
     if not row:
         return []
-    return [dict(r) for r in conn.execute(
-        "SELECT * FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC", (row["id"],)).fetchall()]
+    results = []
+    for r in conn.execute(
+        "SELECT * FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC", (row["id"],)).fetchall():
+        d = dict(r)
+        # Parse JSON fields back to Python objects
+        try:
+            d['money_markets'] = json.loads(d.get('money_markets', '[]'))
+        except (json.JSONDecodeError, TypeError):
+            d['money_markets'] = []
+        try:
+            d['loop_paths'] = json.loads(d.get('loop_paths', '[]'))
+        except (json.JSONDecodeError, TypeError):
+            d['loop_paths'] = []
+        results.append(d)
+    return results
 
 
 def get_scan_count():
