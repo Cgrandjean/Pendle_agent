@@ -15,6 +15,9 @@ RUN poetry config virtualenvs.create false \
 # Copy application code
 COPY . .
 
+# Ensure local packages are importable
+ENV PYTHONPATH=/app
+
 # Create data directory
 RUN mkdir -p data
 
