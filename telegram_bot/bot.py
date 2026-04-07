@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     """Start the Telegram bot with long-polling and scheduled reports."""
+    # Reset DB on startup to ensure schema is up-to-date
+    from utils.database import reset_db
+    reset_db()
+    logger.info("Database reset on startup - schema updated")
+    
     if not TELEGRAM_BOT_TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN is not set. "
