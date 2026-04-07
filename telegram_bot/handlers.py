@@ -310,10 +310,13 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
         if spikes:
             lines = [f"🚨 *SPIKE* — _{now}_\n", f"_{len(spikes)} market(s) surging:_\n"]
             for i, s in enumerate(spikes[:5], 1):
+                mms = s.get('money_markets', [])
+                if isinstance(mms, str):
+                    mms = [mms] if mms else []
                 lines.append(
                     f"*{i}. {s.get('name','?')}*\n"
                     f"   {fmt_pct(s['current_yield'])} (×{s['spike_ratio']:.1f} vs avg {fmt_pct(s['sma_yield'])})\n"
-                    f"   🏦 {', '.join(s.get('money_markets',[])) or 'N/A'}"
+                    f"   🏦 {', '.join(mms) or 'N/A'}"
                 )
             if len(spikes) > 5:
                 lines.append(f"_+{len(spikes)-5} more_")
