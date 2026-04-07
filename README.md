@@ -34,7 +34,7 @@ Scans Pendle markets and returns the best loop opportunities, ranked by theoreti
 
 **Examples:**
 - `/loop` — top 5 all assets, all chains
-- `/loop stable` — stablecoins only (USDC, USDT, DAI...)
+- `/loop stable` — stablecoins only (USDC, USDT, USDS...)
 - `/loop eth arbitrum` — ETH markets on Arbitrum
 - `/loop top 10 btc` — top 10 BTC markets
 
