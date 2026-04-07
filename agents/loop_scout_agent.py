@@ -406,6 +406,9 @@ class LoopScoutAgent:
 
         for vc in vaults:
             sc = score_candidate(implied, spread, tvl, liq, days, len(mms), has_contango)
+            theo_yield = vc["theoretical_max_yield"]
+            # Yield at expiry = prorated return over remaining days
+            yield_at_expiry = theo_yield * (days / 365) if days > 0 else 0
             candidates.append({
                 "address": market.get("address", ""),
                 "chain_id": market.get("chainId"),
@@ -428,7 +431,8 @@ class LoopScoutAgent:
                 "estimated_max_leverage": vc["leverage"],
                 "estimated_ltv": vc["ltv"],
                 "borrow_cost_estimate": vc["borrow_apy"],
-                "theoretical_max_yield": vc["theoretical_max_yield"],
+                "theoretical_max_yield": theo_yield,
+                "yield_at_expiry": yield_at_expiry,
                 "vault_name": vc["vault_name"],
                 "vault_id": vc["vault_id"],
                 "borrow_detail": vc["borrow_detail"],

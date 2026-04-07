@@ -52,11 +52,14 @@ def format_candidate(rank, c):
     lev = c.get("estimated_max_leverage", 0)
     theo = c.get("theoretical_max_yield", 0)
     borrow = c.get("borrow_cost_estimate", 0)
+    yield_at_expiry = c.get("yield_at_expiry", 0)
     
     if lev > 0:
         lines.append(f"   🧮 {lev}x | Borrow: {fmt_pct(borrow)} | Theo yield: {fmt_pct(theo)}")
     else:
         lines.append(f"   🧮 Theo yield: {fmt_pct(theo)} (no leverage)")
+    
+    lines.append(f"   📅 Yield at expiry: {fmt_pct(yield_at_expiry)} ({c.get('days_to_expiry', '?'):.0f}d)")
 
     # Show other available vaults
     all_vaults = c.get("all_vaults", [])
