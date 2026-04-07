@@ -244,6 +244,12 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
                 "borrow_cost": c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0,
                 "money_markets": c.get("money_markets", []),
                 "has_contango": c.get("has_contango", False),
+                # Vault details
+                "vault_name": c.get("vault_name", ""),
+                "vault_id": c.get("vault_id", ""),
+                "leverage": c.get("estimated_max_leverage", 0),
+                "ltv": c.get("estimated_ltv", 0),
+                "borrow_detail": c.get("borrow_detail", ""),
             })
 
     spikes.sort(key=lambda s: s["spike_ratio"], reverse=True)

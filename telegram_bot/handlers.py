@@ -313,11 +313,22 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
                 mms = s.get('money_markets', [])
                 if isinstance(mms, str):
                     mms = [mms] if mms else []
-                lines.append(
-                    f"*{i}. {s.get('name','?')}*\n"
-                    f"   {fmt_pct(s['current_yield'])} (×{s['spike_ratio']:.1f} vs avg {fmt_pct(s['sma_yield'])})\n"
-                    f"   🏦 {', '.join(mms) or 'N/A'}"
-                )
+                
+                vault_name = s.get('vault_name', '')
+                leverage = s.get('leverage', 0)
+                implied = s.get('implied_apy', 0)
+                borrow_detail = s.get('borrow_detail', '')
+                
+                entry = f"*{i}. {s.get('name','?')}*\n"
+                if vault_name:
+                    lev_str = f" ({leverage}x)" if leverage > 0 else ""
+                    entry += f"   🔁 Vault: {vault_name}{lev_str}\n"
+                if borrow_detail and borrow_detail != "Automated loop":
+                    entry += f"   💵 {borrow_detail}\n"
+                entry += f"   📊 Implied: {fmt_pct(implied)} → Theo: {fmt_pct(s['current_yield'])}\n"
+                entry += f"   ⚡ ×{s['spike_ratio']:.1f} vs avg {fmt_pct(s['sma_yield'])}\n"
+                entry += f"   🏦 {', '.join(mms) or 'N/A'}"
+                lines.append(entry)
             if len(spikes) > 5:
                 lines.append(f"_+{len(spikes)-5} more_")
             msg = "\n".join(lines)

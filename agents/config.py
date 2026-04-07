@@ -40,6 +40,7 @@ CHAINS: dict[str, int] = {
 ASSET_FAMILIES: dict[str, list[str]] = {
     "stable": [
         "usdc", "usdt", "usds", "usde", "usdtb", "gho", "frax", "lusd",
+        "ausd", "aUSD",
         "curveusd", "crvusd", "susd", "stable", "usd",
     ],
     "eth": [
