@@ -65,21 +65,22 @@ def _now():
 
 # -- Scans --
 
+def _ensure_vault_columns(conn):
+    """Ensure vault columns exist in the candidates table."""
+    for col in ["vault_name", "vault_id", "borrow_detail"]:
+        try:
+            # Check if column exists
+            info = conn.execute(f"PRAGMA table_info(candidates)").fetchall()
+            col_names = [r[1] for r in info]
+            if col not in col_names:
+                conn.execute(f"ALTER TABLE candidates ADD COLUMN {col} TEXT")
+        except Exception:
+            pass
+
+
 def save_scan(query, chain, asset_filter, candidates):
     conn = _db()
-    # Add vault columns if they exist in schema
-    try:
-        conn.execute("ALTER TABLE candidates ADD COLUMN vault_name TEXT")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE candidates ADD COLUMN vault_id TEXT")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE candidates ADD COLUMN borrow_detail TEXT")
-    except Exception:
-        pass
+    _ensure_vault_columns(conn)
     
     cur = conn.execute(
         "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",

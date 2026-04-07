@@ -33,6 +33,11 @@ def main():
     thread = threading.Thread(target=run_health_server, daemon=True)
     thread.start()
 
+    # Reset DB to ensure schema is up-to-date on each deployment
+    from utils.database import reset_db
+    reset_db()
+    log.info("Database reset on startup")
+
     # Start the Telegram bot (blocks)
     from telegram_bot.bot import main as bot_main
     bot_main()
