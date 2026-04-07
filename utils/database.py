@@ -82,26 +82,42 @@ def save_scan(query, chain, asset_filter, candidates):
     conn = _db()
     _ensure_vault_columns(conn)
     
+    # Debug: log table schema
+    try:
+        info = conn.execute("PRAGMA table_info(candidates)").fetchall()
+        col_names = [r[1] for r in info]
+        log.info("DB schema: %d columns: %s", len(col_names), col_names)
+    except Exception as e:
+        log.error("Failed to get schema: %s", e)
+    
     cur = conn.execute(
         "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",
         (_now(), query, chain, asset_filter, len(candidates)))
     sid = cur.lastrowid
 
     for c in candidates:
-        conn.execute(
-            """INSERT INTO candidates
-               (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
-                borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
-                asset_family, money_markets, has_contango, loop_paths,
-                vault_name, vault_id, borrow_detail)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
-             c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
-             c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
-             c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
-             c.get("asset_family",""), json.dumps(c.get("money_markets",[])),
-             1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[])),
-             c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail","")))
+        values = (
+            sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
+            c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
+            c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
+            c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
+            c.get("asset_family",""), json.dumps(c.get("money_markets",[])),
+            1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[])),
+            c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail","")
+        )
+        log.info("Inserting %d values into candidates", len(values))
+        try:
+            conn.execute(
+                """INSERT INTO candidates
+                   (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
+                    borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
+                    asset_family, money_markets, has_contango, loop_paths,
+                    vault_name, vault_id, borrow_detail)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                values)
+        except Exception as e:
+            log.error("DB insert failed: %s | values=%s", e, values)
+            raise
 
     conn.commit()
     log.info("Scan #%d: %d candidates", sid, len(candidates))
