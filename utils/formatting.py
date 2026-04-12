@@ -82,6 +82,20 @@ def format_candidate(rank, c):
         lines.append("   ⚡ Contango")
 
     lines.append(f"   ⭐ {c.get('score', 0)}/100")
+
+    # Links
+    pendle_url = c.get("pendle_url", "")
+    vault_url = c.get("vault_url", "")
+    if pendle_url or vault_url:
+        link_parts = []
+        if pendle_url:
+            link_parts.append(f"[📘 Pendle]({pendle_url})")
+        if vault_url:
+            protocol = c.get("vault_id", "")
+            label = {"morpho": "📗 Morpho", "euler": "📙 Euler", "aavev3": "📙 AAVE"}.get(protocol, "📙 Protocol")
+            link_parts.append(f"[{label}]({vault_url})")
+        lines.append(f"   {' | '.join(link_parts)}")
+
     return "\n".join(lines) + "\n"
 
 

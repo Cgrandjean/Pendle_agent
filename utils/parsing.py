@@ -72,3 +72,16 @@ def detect_asset_family(name: str) -> str:
         if any(kw in low for kw in keywords):
             return family
     return "other"
+
+
+# Stablecoin keywords (lowercase)
+_STABLE_KEYWORDS = [kw.lower() for kw in ASSET_FAMILIES.get("stable", [])]
+
+
+def is_pt_stablecoin(symbol: str) -> bool:
+    """Return True if the PT token is backed by a stablecoin.
+    
+    Checks if the symbol contains any stablecoin keyword.
+    """
+    low = symbol.lower()
+    return any(kw in low for kw in _STABLE_KEYWORDS)

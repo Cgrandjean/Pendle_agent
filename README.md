@@ -12,7 +12,7 @@ pinned: false
 
 > **Telegram bot that detects the best loop opportunities on Pendle Finance**
 
-An autonomous agent that continuously scans Pendle PT (Principal Token) markets, cross-references data with lending protocols (AAVE, Morpho, Euler), and identifies the best **loop** opportunities — a DeFi strategy that involves buying discounted PTs, depositing them as collateral, borrowing the underlying asset, and repurchasing PT in a cycle to amplify yield.
+An autonomous agent that continuously scans Pendle PT (Principal Token) markets across **10 chains** (Ethereum, Arbitrum, Base, Optimism, BNB, Sonic, Mantle, Plasma, Berachain, + testnet), cross-references data with lending protocols (AAVE V3, Morpho Blue, Euler V2), and identifies the best **loop** opportunities — a DeFi strategy that involves buying discounted PTs, depositing them as collateral, borrowing the underlying asset, and repurchasing PT in a cycle to amplify yield.
 
 ---
 
@@ -279,12 +279,12 @@ Pendle_agent/
 ├── agents/
 │   ├── loop_scout_agent.py   # Main LangGraph agent
 │   ├── pendle_mcp.py         # Pendle MCP API client
-│   └── config.py             # Configuration (chains, assets, thresholds)
+│   └── config.py             # Configuration (chains, assets, thresholds, LTV defaults)
 │
 ├── utils/
-│   ├── fetch_aave.py         # AAVE rate fetching
-│   ├── fetch_morpho.py       # Morpho rate fetching
-│   ├── fetch_euler.py        # Euler rate fetching
+│   ├── fetch_aave.py         # AAVE V3 rate fetching (8 chains)
+│   ├── fetch_morpho.py       # Morpho Blue rate fetching (3 chains)
+│   ├── fetch_euler.py        # Euler V2 rate fetching (8 chains via Goldsky subgraphs)
 │   ├── scoring.py            # Candidate scoring algorithm
 │   ├── formatting.py         # Telegram message formatting
 │   ├── parsing.py            # User query parsing

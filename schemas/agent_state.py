@@ -4,14 +4,12 @@ from typing import TypedDict
 
 
 class LoopScoutState(TypedDict, total=False):
-    query: str
     chain_filter: int | None
     chain_name: str | None
     asset_filter: str | None
     count: int
     chains: list[int]
     markets: list[dict]
-    enriched_markets: list[dict]
     aave_data: dict
     morpho_data: dict
     euler_data: dict

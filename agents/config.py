@@ -12,13 +12,10 @@ ALLOWED_CHAT_IDS: list[int] = [
     if cid.strip()
 ]
 
-PENDLE_MCP_URL: str = "https://api-v2.pendle.finance/core/mcp"
-
 # Database
 DB_PATH: str = os.environ.get("DB_PATH", "data/loop_scout.db")
 
 SCAN_INTERVAL_MINUTES: int = int(os.environ.get("SCAN_INTERVAL_MINUTES", "10"))
-DEFAULT_REPORT_QUERY: str = os.environ.get("DEFAULT_REPORT_QUERY", "top 5 stable loops")
 
 # Chain ID mapping
 CHAINS: dict[str, int] = {
@@ -34,6 +31,9 @@ CHAINS: dict[str, int] = {
     "op": 10,
     "mantle": 5000,
     "sonic": 146,
+    "plasma": 9745,
+    "berachain": 80094,
+    "bera": 80094,
 }
 
 # Asset family keywords

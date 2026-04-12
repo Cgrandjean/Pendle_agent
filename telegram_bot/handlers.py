@@ -8,7 +8,7 @@ from telegram import Update, Bot
 from telegram.ext import ContextTypes
 
 from agents.loop_scout_agent import LoopScoutAgent
-from agents.config import ALLOWED_CHAT_IDS, DEFAULT_REPORT_QUERY, CHAINS
+from agents.config import ALLOWED_CHAT_IDS, CHAINS
 from utils.database import (
     add_alert, get_alerts, delete_alert,
     check_alerts_for_candidates, get_scan_count,
@@ -20,10 +20,8 @@ from utils.formatting import fmt_pct, format_candidate
 
 log = logging.getLogger(__name__)
 
-# Module-level agent singleton
 _agent = None
 
-# Help text sections
 HELP_INTRO = (
     "📖 *Help — Pendle Loop Scout*\n\n"
     "*What is a loop?*\n"
@@ -38,7 +36,7 @@ HELP_LOOP = (
     "`/loop [count] [asset] [chain]`\n"
     "• `/loop` — top 5 all assets, all chains\n"
     "• `/loop stable` — stablecoins only\n"
-    "• `/loop top 10 eth arbitrum` — top 10 ETH on Arbitrum\n"
+    "• `/loop 10 eth arbitrum` — top 10 ETH on Arbitrum\n"
     "• `/loop btc` — BTC markets\n\n"
     "Chains: `ethereum` `arbitrum` `base` `bnb` `optimism` `mantle` `sonic`\n"
     "Assets: `stable` `eth` `btc`"
@@ -94,7 +92,6 @@ HELP_READING = (
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━"
 
-# Spike config aliases
 SPIKE_KEY_MAP = {
     "window": ("spike_window", int),
     "w": ("spike_window", int),
@@ -109,7 +106,6 @@ MSG_MAX_LENGTH = 4096
 
 
 def _get_agent() -> LoopScoutAgent:
-    """Get or create the singleton agent."""
     global _agent
     if _agent is None:
         _agent = LoopScoutAgent()
@@ -117,23 +113,49 @@ def _get_agent() -> LoopScoutAgent:
 
 
 async def _send_chunks(bot: Bot, chat_id: int, text: str):
-    """Send text in chunks to respect Telegram's message length limit."""
     while text:
         chunk, text = text[:MSG_MAX_LENGTH], text[MSG_MAX_LENGTH:]
         await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
 def _is_authorized(chat_id: int) -> bool:
-    """Check if the chat is authorized to use the bot."""
     return not ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
+
+
+def _parse_loop_args(args: list[str]) -> tuple[int, str | None, str | None]:
+    """Parse /loop command args. Returns (count, asset, chain)."""
+    count = 5
+    asset = None
+    chain = None
+
+    args_low = [a.lower() for a in args]
+
+    # Count: first integer
+    for a in args:
+        if a.isdigit():
+            count = min(int(a), 20)
+            break
+
+    # Asset family
+    for a in args_low:
+        if a in ("stable", "eth", "btc"):
+            asset = a
+            break
+
+    # Chain: match against CHAINS keys
+    for a in args_low:
+        if a in CHAINS:
+            chain = a
+            break
+
+    return count, asset, chain
 
 
 def _parse_alert_args(args: str) -> tuple:
     """Parse alert command arguments. Returns (asset_filter, chain, min_yield)."""
     low = args.lower().strip()
 
-    # Parse yield percentage
-    min_yield = 0.10  # default
+    min_yield = 0.10
     m = re.search(r"(\d+(?:\.\d+)?)\s*%", low)
     if m:
         min_yield = float(m.group(1)) / 100
@@ -149,7 +171,6 @@ def _parse_alert_args(args: str) -> tuple:
 
 
 def _format_alert_message(now: str, matches: list) -> str:
-    """Format alert message for Telegram."""
     lines = [f"🔔 *Alert* — _{now}_\n"]
     for i, c in enumerate(matches[:5], 1):
         theo = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
@@ -160,7 +181,6 @@ def _format_alert_message(now: str, matches: list) -> str:
 
 
 def _format_spike_entry(index: int, spike: dict) -> str:
-    """Format a single spike entry for Telegram."""
     mms = spike.get("money_markets", [])
     if isinstance(mms, str):
         mms = [mms] if mms else []
@@ -188,7 +208,6 @@ def _format_spike_entry(index: int, spike: dict) -> str:
 
 
 def _format_spike_message(now: str, spikes: list) -> str:
-    """Format spike alert message for Telegram."""
     lines = [
         f"🚨 *SPIKE* — _{now}_\n",
         f"_{len(spikes)} market(s) surging:_\n"
@@ -203,7 +222,6 @@ def _format_spike_message(now: str, spikes: list) -> str:
 # -- Command Handlers --
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command."""
     if not _is_authorized(update.effective_chat.id):
         return
     await update.message.reply_text(
@@ -217,7 +235,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -233,18 +250,32 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def loop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /loop command."""
     if not _is_authorized(update.effective_chat.id):
         return
-    query = " ".join(context.args) if context.args else ""
-    await _run_query(update, query)
+
+    args = list(context.args) if context.args else []
+    count, asset, chain = _parse_loop_args(args)
+
+    thinking = await update.message.reply_text("⏳ Scanning…", parse_mode="Markdown")
+    agent = _get_agent()
+
+    try:
+        resp = await agent.run(count=count, asset=asset, chain=chain)
+        if len(resp) <= MSG_MAX_LENGTH:
+            await thinking.edit_text(resp, parse_mode="Markdown")
+        else:
+            await thinking.edit_text(resp[:MSG_MAX_LENGTH], parse_mode="Markdown")
+            for i in range(MSG_MAX_LENGTH, len(resp), MSG_MAX_LENGTH):
+                await update.message.reply_text(resp[i:i + MSG_MAX_LENGTH], parse_mode="Markdown")
+    except Exception as e:
+        log.exception("Query failed")
+        await thinking.edit_text(f"❌ Error: `{e}`", parse_mode="Markdown")
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /status command - shows cached results from last scan."""
     if not _is_authorized(update.effective_chat.id):
         return
-    
+
     candidates = get_last_scan_candidates()
     if not candidates:
         await update.message.reply_text(
@@ -253,27 +284,25 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
         return
-    
-    # Sort by theoretical yield and take top 10
+
     candidates.sort(key=lambda c: c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0, reverse=True)
     top = candidates[:10]
-    
-    # Get last scan info
+
     from utils.database import export_db_summary
     summary = export_db_summary()
     last_scan = summary.get("last_scan", {})
     ts = last_scan.get("ts", "?")
     query = last_scan.get("query", "?")
-    
+
     lines = [f"📊 *Status Report* — _cached from {ts}_\n"]
     lines.append(f"_Query: `{query}`_\n")
     lines.append(f"_Showing top {len(top)} of {len(candidates)} candidates:_\n")
-    
+
     for i, c in enumerate(top, 1):
         lines.append(format_candidate(i, c))
-    
+
     lines.append("\n⚠️ *Disclaimer* — Rendements théoriques estimés. Vérifiez LTV/borrow réels. Bot read-only. DYOR.")
-    
+
     msg = "\n".join(lines)
     if len(msg) <= MSG_MAX_LENGTH:
         await update.message.reply_text(msg, parse_mode="Markdown")
@@ -282,7 +311,6 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def alert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /alert command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -312,7 +340,6 @@ async def alert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /alerts command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -336,7 +363,6 @@ async def alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def spike_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /spike command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -389,7 +415,6 @@ async def spike_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delalert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /delalert command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -410,7 +435,6 @@ async def delalert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /export command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -442,7 +466,6 @@ async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def resetdb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /resetdb command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -466,7 +489,6 @@ async def resetdb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clear command."""
     if not _is_authorized(update.effective_chat.id):
         return
 
@@ -494,31 +516,6 @@ async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# -- Core Query Execution --
-
-async def _run_query(update: Update, query: str, header: str = ""):
-    """Run a query against the agent and send the response."""
-    agent = _get_agent()
-    thinking = await update.message.reply_text("⏳ Scanning…", parse_mode="Markdown")
-
-    try:
-        resp = await agent.run(query)
-        if header:
-            resp = header + resp
-
-        if len(resp) <= MSG_MAX_LENGTH:
-            await thinking.edit_text(resp, parse_mode="Markdown")
-        else:
-            await thinking.edit_text(resp[:MSG_MAX_LENGTH], parse_mode="Markdown")
-            for i in range(MSG_MAX_LENGTH, len(resp), MSG_MAX_LENGTH):
-                await update.message.reply_text(
-                    resp[i:i + MSG_MAX_LENGTH], parse_mode="Markdown"
-                )
-    except Exception as e:
-        log.exception("Query failed")
-        await thinking.edit_text(f"❌ Error: `{e}`", parse_mode="Markdown")
-
-
 # -- Scheduled Scan --
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
@@ -528,7 +525,7 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     try:
-        await agent.run(DEFAULT_REPORT_QUERY)
+        await agent.run(count=5, asset="stable")
     except Exception as e:
         log.exception("Scan failed")
         return
@@ -540,7 +537,6 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
         if not candidates:
             return
 
-        # Check alerts
         for cid, matches in check_alerts_for_candidates(candidates).items():
             if matches:
                 msg = _format_alert_message(now, matches)
@@ -549,7 +545,6 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     log.error("Alert to %d: %s", cid, e)
 
-        # Check spikes
         spikes = detect_yield_spikes(candidates)
         if spikes:
             msg = _format_spike_message(now, spikes)
