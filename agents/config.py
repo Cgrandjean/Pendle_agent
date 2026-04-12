@@ -56,7 +56,10 @@ ASSET_FAMILIES: dict[str, list[str]] = {
 MIN_TVL = 100_000
 MIN_DAYS_TO_EXPIRY = 0
 
-# Spike detection
-SPIKE_WINDOW: int = int(os.environ.get("SPIKE_WINDOW", "30"))
-SPIKE_MULTIPLIER: float = float(os.environ.get("SPIKE_MULTIPLIER", "1.5"))
-SPIKE_MIN_YIELD: float = float(os.environ.get("SPIKE_MIN_YIELD", "0.05"))
+# Borrow market liquidity
+MIN_BORROW_LIQUIDITY_USD = 10_000  # Minimum $10k available to borrow
+
+# Spike detection defaults (overridden by DB settings at runtime)
+SPIKE_WINDOW_DEFAULT = 30
+SPIKE_MULTIPLIER_DEFAULT = 1.5
+SPIKE_MIN_YIELD_DEFAULT = 0.05

@@ -87,14 +87,6 @@ def save_scan(query, chain, asset_filter, candidates):
     conn = _db()
     _ensure_vault_columns(conn)
     
-    # Debug: log table schema
-    try:
-        info = conn.execute("PRAGMA table_info(candidates)").fetchall()
-        col_names = [r[1] for r in info]
-        log.info("DB schema: %d columns: %s", len(col_names), col_names)
-    except Exception as e:
-        log.error("Failed to get schema: %s", e)
-    
     cur = conn.execute(
         "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",
         (_now(), query, chain, asset_filter, len(candidates)))
@@ -106,22 +98,21 @@ def save_scan(query, chain, asset_filter, candidates):
             c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
             c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
             c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
-            c.get("asset_family",""), json.dumps(c.get("money_markets",[])),
-            1 if c.get("has_contango") else 0, json.dumps(c.get("loop_paths",[])),
-            c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail","")
+            c.get("asset_family",""), "[]",
+            0,
+            c.get("vault_name",""), c.get("vault_id","")
         )
-        log.info("Inserting %d values into candidates", len(values))
         try:
             conn.execute(
                 """INSERT INTO candidates
                    (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
                     borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
-                    asset_family, money_markets, has_contango, loop_paths,
+                    asset_family, money_markets, has_contango,
                     vault_name, vault_id, borrow_detail)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 values)
         except Exception as e:
-            log.error("DB insert failed: %s | values=%s", e, values)
+            log.error("DB insert failed: %s", e)
             raise
 
     conn.commit()
@@ -245,11 +236,11 @@ def set_setting(key, value):
 
 
 def get_spike_config():
-    from agents.config import SPIKE_WINDOW, SPIKE_MULTIPLIER, SPIKE_MIN_YIELD
+    from agents.config import SPIKE_WINDOW_DEFAULT, SPIKE_MULTIPLIER_DEFAULT, SPIKE_MIN_YIELD_DEFAULT
     return {
-        "window": int(get_setting("spike_window", SPIKE_WINDOW)),
-        "multiplier": float(get_setting("spike_multiplier", SPIKE_MULTIPLIER)),
-        "min_yield": float(get_setting("spike_min_yield", SPIKE_MIN_YIELD)),
+        "window": int(get_setting("spike_window", SPIKE_WINDOW_DEFAULT)),
+        "multiplier": float(get_setting("spike_multiplier", SPIKE_MULTIPLIER_DEFAULT)),
+        "min_yield": float(get_setting("spike_min_yield", SPIKE_MIN_YIELD_DEFAULT)),
     }
 
 

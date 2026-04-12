@@ -33,12 +33,16 @@ async def _gql(client: httpx.AsyncClient, subgraph: str, query: str) -> dict:
     return response.json()
 
 
+# Euler V2 APY is stored in RAY format (1e27) or BASIS (1e18)
+_RAY = 1e27
+_BASIS = 1e18
+
 def _ray_to_pct(raw: int) -> float:
-    """Convert ray-format APY (1e27) to percentage."""
+    """Convert Euler APY (RAY or BASIS format) to percentage."""
     if raw > 1e20:
-        return raw / 1e27 * 100
+        return raw / _RAY * 100
     elif raw > 1e14:
-        return raw / 1e18 * 100
+        return raw / _BASIS * 100
     return 0.0
 
 

@@ -9,6 +9,26 @@ for name, cid in CHAINS.items():
         CHAIN_NAMES[cid] = name.capitalize()
 
 
+def _build_urls(c):
+    """Build Pendle and protocol URLs from candidate data."""
+    addr = c.get("address", "")
+    chain_id = c.get("chain_id", 1)
+    chain_name = CHAIN_NAMES.get(chain_id, "ethereum").lower()
+    
+    pendle_url = f"https://app.pendle.finance/trade/markets/{addr}/swap?view=pt"
+    
+    protocol = c.get("vault_id", "")
+    vault_url = ""
+    if protocol == "aavev3":
+        vault_url = "https://app.aave.com"
+    elif protocol == "euler":
+        vault_url = "https://app.euler.finance"
+    elif protocol == "morpho":
+        vault_url = f"https://app.morpho.org/{chain_name}"
+    
+    return pendle_url, vault_url
+
+
 def fmt_pct(val):
     try:
         return f"{float(val) * 100:.2f}%"
@@ -27,74 +47,70 @@ def fmt_usd(val):
     return f"${v:.0f}"
 
 
+def fmt_tokens(val, symbol=""):
+    """Format token amount (non-USD)."""
+    try:
+        v = float(val)
+    except (TypeError, ValueError):
+        return "N/A"
+    suffix = f" {symbol}" if symbol else ""
+    if v >= 1e9: return f"{v/1e9:.1f}B{suffix}"
+    if v >= 1e6: return f"{v/1e6:.1f}M{suffix}"
+    if v >= 1e3: return f"{v/1e3:.0f}K{suffix}"
+    return f"{v:.0f}{suffix}"
+
+
 def format_candidate(rank, c):
     chain = CHAIN_NAMES.get(c.get("chain_id", 0), "?")
-    name = c.get("name") or c.get("symbol") or "?"
-    proto = c.get("protocol") or ""
+    name = c.get("name") or "?"
     vault_name = c.get("vault_name", "")
-    borrow_detail = c.get("borrow_detail", "")
+    protocol = c.get("vault_id", "")
 
-    lines = [
-        f"*{rank}. {name}*",
-        f"   📍 {chain}" + (f" | {proto}" if proto else ""),
-        f"   📊 Implied: {fmt_pct(c.get('implied_apy'))} | Underlying: {fmt_pct(c.get('underlying_apy'))}",
-        f"   📈 Spread: {fmt_pct(c.get('spread'))} | PT discount: {fmt_pct(c.get('pt_discount'))}",
-        f"   💰 TVL: {fmt_usd(c.get('tvl'))} | Liq: {fmt_usd(c.get('liquidity'))}",
-        f"   ⏰ {c.get('days_to_expiry', '?')}d remaining",
-    ]
-
-    # Show vault-specific info
-    if vault_name:
-        lines.append(f"   🔁 Vault: {vault_name}")
-        if borrow_detail and borrow_detail != "Automated loop":
-            lines.append(f"   💵 {borrow_detail}")
-
+    # Compute on the fly
     lev = c.get("estimated_max_leverage", 0)
     theo = c.get("theoretical_max_yield", 0)
     borrow = c.get("borrow_cost_estimate", 0)
-    yield_at_expiry = c.get("yield_at_expiry", 0)
-    
+    days = c.get("days_to_expiry", 0)
+    yield_at_expiry = theo * (days / 365) if days > 0 else 0
+
+    lines = [
+        f"*{rank}. {name}*",
+        f"   📍 {chain}",
+        f"   📊 Implied: {fmt_pct(c.get('implied_apy'))} | Underlying: {fmt_pct(c.get('underlying_apy'))}",
+        f"   📈 Spread: {fmt_pct(c.get('spread'))} | PT discount: {fmt_pct(c.get('pt_discount'))}",
+        f"   💰 TVL: {fmt_usd(c.get('tvl'))} | Liq: {fmt_usd(c.get('liquidity'))}",
+        f"   ⏰ {days}d remaining",
+    ]
+
+    if vault_name:
+        # Build borrow info string
+        borrow_liq_usd = c.get("borrow_liquidity_usd", 0)
+        borrow_liq_tokens = c.get("borrow_liquidity_tokens", 0)
+        borrow_sym = c.get("borrow_token_symbol", "")
+        
+        if protocol == "euler" and borrow_liq_tokens > 0 and borrow_sym:
+            borrow_info = f" (💧 {fmt_tokens(borrow_liq_tokens, borrow_sym)})"
+        elif borrow_liq_usd > 0:
+            borrow_info = f" (💧 {fmt_usd(borrow_liq_usd)})"
+        elif borrow_liq_tokens > 0 and borrow_sym:
+            borrow_info = f" (💧 {fmt_tokens(borrow_liq_tokens, borrow_sym)})"
+        else:
+            borrow_info = ""
+        
+        lines.append(f"   🔁 {vault_name}{borrow_info}")
+
     if lev > 0:
-        lines.append(f"   🧮 {lev}x | Borrow: {fmt_pct(borrow)} | Theo yield: {fmt_pct(theo)}")
+        lines.append(f"   🧮 {lev}x | Borrow: {fmt_pct(borrow)} | Theo: {fmt_pct(theo)}")
     else:
-        lines.append(f"   🧮 Theo yield: {fmt_pct(theo)} (no leverage)")
-    
-    lines.append(f"   📅 Yield at expiry: {fmt_pct(yield_at_expiry)} ({c.get('days_to_expiry', '?'):.0f}d)")
+        lines.append(f"   🧮 Theo: {fmt_pct(theo)}")
 
-    # Show other available vaults
-    all_vaults = c.get("all_vaults", [])
-    if len(all_vaults) > 1:
-        lines.append(f"   📋 Other vaults:")
-        for v in all_vaults:
-            if v["vault_id"] != c.get("vault_id"):
-                v_lev = v.get("leverage", 0)
-                v_yield = v.get("theoretical_max_yield", 0)
-                v_name = v.get("vault_name", "?")
-                if v_lev > 0:
-                    lines.append(f"     • {v_name}: {v_lev}x → {fmt_pct(v_yield)}")
-                else:
-                    lines.append(f"     • {v_name}: {fmt_pct(v_yield)}")
-
-    mms = c.get("money_markets", [])
-    if mms:
-        lines.append(f"   🏦 {', '.join(mms)}")
-    if c.get("has_contango"):
-        lines.append("   ⚡ Contango")
-
+    lines.append(f"   📅 Yield at expiry: {fmt_pct(yield_at_expiry)} ({days:.0f}d)")
     lines.append(f"   ⭐ {c.get('score', 0)}/100")
 
-    # Links
-    pendle_url = c.get("pendle_url", "")
-    vault_url = c.get("vault_url", "")
-    if pendle_url or vault_url:
-        link_parts = []
-        if pendle_url:
-            link_parts.append(f"[📘 Pendle]({pendle_url})")
-        if vault_url:
-            protocol = c.get("vault_id", "")
-            label = {"morpho": "📗 Morpho", "euler": "📙 Euler", "aavev3": "📙 AAVE"}.get(protocol, "📙 Protocol")
-            link_parts.append(f"[{label}]({vault_url})")
-        lines.append(f"   {' | '.join(link_parts)}")
+    # Compute URLs on the fly
+    pendle_url, vault_url = _build_urls(c)
+    label = {"morpho": "📗 Morpho", "euler": "📙 Euler", "aavev3": "📙 AAVE"}.get(protocol, "📙")
+    lines.append(f"   [📘 Pendle]({pendle_url}) | [{label}]({vault_url})")
 
     return "\n".join(lines) + "\n"
 
