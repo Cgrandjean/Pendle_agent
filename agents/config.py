@@ -3,6 +3,12 @@
 import os
 from dotenv import load_dotenv
 
+from const import (
+    CHAINS, ASSET_FAMILIES,
+    MIN_TVL, MIN_DAYS_TO_EXPIRY, MIN_BORROW_LIQUIDITY_USD,
+    SPIKE_WINDOW_DEFAULT, SPIKE_MULTIPLIER_DEFAULT, SPIKE_MIN_YIELD_DEFAULT,
+)
+
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -12,54 +18,5 @@ ALLOWED_CHAT_IDS: list[int] = [
     if cid.strip()
 ]
 
-# Database
 DB_PATH: str = os.environ.get("DB_PATH", "data/loop_scout.db")
-
 SCAN_INTERVAL_MINUTES: int = int(os.environ.get("SCAN_INTERVAL_MINUTES", "10"))
-
-# Chain ID mapping
-CHAINS: dict[str, int] = {
-    "ethereum": 1,
-    "eth": 1,
-    "mainnet": 1,
-    "arbitrum": 42161,
-    "arb": 42161,
-    "base": 8453,
-    "bnb": 56,
-    "bsc": 56,
-    "optimism": 10,
-    "op": 10,
-    "mantle": 5000,
-    "sonic": 146,
-    "plasma": 9745,
-    "berachain": 80094,
-    "bera": 80094,
-}
-
-# Asset family keywords
-ASSET_FAMILIES: dict[str, list[str]] = {
-    "stable": [
-        "usdc", "usdt", "usds", "usde", "usdtb", "gho", "frax", "lusd",
-        "ausd", "aUSD",
-        "curveusd", "crvusd", "susd", "stable", "usd",
-    ],
-    "eth": [
-        "eth", "weth", "steth", "wsteth", "reth", "cbeth", "ezeth",
-        "rseth", "weeth", "eeth", "meth", "lst", "lrt",
-    ],
-    "btc": [
-        "btc", "wbtc", "lbtc", "ebtc", "solvbtc", "tbtc", "cbbtc",
-    ],
-}
-
-# Market filters
-MIN_TVL = 100_000
-MIN_DAYS_TO_EXPIRY = 0
-
-# Borrow market liquidity
-MIN_BORROW_LIQUIDITY_USD = 10_000  # Minimum $10k available to borrow
-
-# Spike detection defaults (overridden by DB settings at runtime)
-SPIKE_WINDOW_DEFAULT = 30
-SPIKE_MULTIPLIER_DEFAULT = 1.5
-SPIKE_MIN_YIELD_DEFAULT = 0.05

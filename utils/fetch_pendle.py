@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -49,8 +50,27 @@ def _flatten(m: dict, chain_id: int) -> dict:
     # REST API uses 'liquidity' — alias to 'totalTvl' for agent compatibility
     if "details_totalTvl" not in flat and "details_liquidity" in flat:
         flat["details_totalTvl"] = flat["details_liquidity"]
+    # Compute underlyingApy from aggregatedApy - pendleApy (not available in list endpoint)
+    if "details_underlyingApy" not in flat:
+        agg = float(flat.get("details_aggregatedApy") or 0)
+        pendle = float(flat.get("details_pendleApy") or 0)
+        flat["details_underlyingApy"] = max(agg - pendle, 0)
+    # Compute ptDiscount from impliedApy and expiry (not available in list endpoint)
+    if "details_ptDiscount" not in flat:
+        implied = float(flat.get("details_impliedApy") or 0)
+        expiry_str = flat.get("expiry")
+        if implied > 0 and expiry_str:
+            try:
+                exp = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+                days = max((exp - datetime.now(timezone.utc)).total_seconds() / 86400, 0)
+                years = days / 365.0
+                flat["details_ptDiscount"] = 1 - 1 / (1 + implied) ** years if years > 0 else 0
+            except Exception:
+                flat["details_ptDiscount"] = 0
+        else:
+            flat["details_ptDiscount"] = 0
     # Set missing fields to 0 so agent doesn't break
-    for field in ("underlyingApy", "ptDiscount", "ytFloatingApy", "swapFeeApy",
+    for field in ("ytFloatingApy", "swapFeeApy",
                    "tradingVolume", "voterApy", "lpRewardApy"):
         flat.setdefault(f"details_{field}", 0)
     return flat

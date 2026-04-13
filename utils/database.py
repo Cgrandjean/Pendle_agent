@@ -100,16 +100,17 @@ def save_scan(query, chain, asset_filter, candidates):
             c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
             c.get("asset_family",""), "[]",
             0,
-            c.get("vault_name",""), c.get("vault_id","")
+            c.get("loop_paths", ""),
+            c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail", "")
         )
         try:
             conn.execute(
                 """INSERT INTO candidates
                    (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
                     borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
-                    asset_family, money_markets, has_contango,
+                    asset_family, money_markets, has_contango, loop_paths,
                     vault_name, vault_id, borrow_detail)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 values)
         except Exception as e:
             log.error("DB insert failed: %s", e)

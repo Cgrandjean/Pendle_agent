@@ -7,15 +7,14 @@ from typing import Any
 
 import httpx
 
-from utils.parsing import is_pt_not_expired, is_pt_stablecoin
+from utils.parsing import is_pt_not_expired
+from utils.fetch_pendle import ALL_CHAINS
 
 logger = logging.getLogger(__name__)
 
 MORPHO_GQL = "https://blue-api.morpho.org/graphql"
 HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
 
-# Morpho chains that have PT markets
-MORPHO_CHAIN_IDS = [1, 8453, 42161]
 
 
 async def _gql(client: httpx.AsyncClient, query: str) -> dict:
@@ -43,7 +42,7 @@ async def fetch_morpho_data(
         }
     """
     if chain_ids is None:
-        chain_ids = MORPHO_CHAIN_IDS
+        chain_ids = ALL_CHAINS
 
     all_markets: list[dict] = []
 
@@ -52,7 +51,7 @@ async def fetch_morpho_data(
             try:
                 result = await _gql(client, f"""
                 {{
-                  markets(first: 100, where: {{ search: "PT", chainId_in: [{chain_id}] }}) {{
+                  markets(first: 1000, where: {{ search: "PT", chainId_in: [{chain_id}] }}) {{
                     items {{
                       uniqueKey
                       collateralAsset {{ symbol address }}
@@ -85,7 +84,7 @@ async def fetch_morpho_data(
                 borrow_apy = float(state.get("borrowApy") or 0)
 
                 col_symbol = col.get("symbol", "")
-                if supply_usd > min_supply_usd and is_pt_not_expired(col_symbol) and is_pt_stablecoin(col_symbol):
+                if supply_usd > min_supply_usd and is_pt_not_expired(col_symbol):
                     all_markets.append({
                         "unique_key": m.get("uniqueKey", ""),
                         "collateral_symbol": col.get("symbol", ""),

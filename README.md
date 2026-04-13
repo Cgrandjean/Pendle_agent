@@ -130,8 +130,8 @@ The bot uses a LangGraph graph with nodes that run in parallel:
          │               │               │
          ▼               ▼               ▼
     ┌─────────────────────────────────────────┐
-    │         collect_protocols               │
-    │  (merges lending data)                  │
+    │         collect_markets                  │
+    │  (fetches Pendle PT markets)             │
     └─────────────────┬───────────────────────┘
                       ▼
     ┌─────────────────────────────────────────┐
@@ -277,18 +277,18 @@ python -m telegram_bot.bot
 ```
 Pendle_agent/
 ├── agents/
-│   ├── loop_scout_agent.py   # Main LangGraph agent
-│   ├── pendle_mcp.py         # Pendle MCP API client
+│   ├── loop_scout_agent.py   # Main LangGraph agent (finds loop opportunities)
 │   └── config.py             # Configuration (chains, assets, thresholds, LTV defaults)
 │
 ├── utils/
-│   ├── fetch_aave.py         # AAVE V3 rate fetching (8 chains)
-│   ├── fetch_morpho.py       # Morpho Blue rate fetching (3 chains)
-│   ├── fetch_euler.py        # Euler V2 rate fetching (8 chains via Goldsky subgraphs)
+│   ├── fetch_pendle.py       # Fetch Pendle PT markets (10 chains)
+│   ├── fetch_aave.py         # AAVE V3 borrow rates (8 chains)
+│   ├── fetch_morpho.py       # Morpho Blue PT markets (all Pendle chains)
+│   ├── fetch_euler.py        # Euler V2 PT and stable vaults
 │   ├── scoring.py            # Candidate scoring algorithm
 │   ├── formatting.py         # Telegram message formatting
-│   ├── parsing.py            # User query parsing
-│   └── database.py           # SQLite persistence
+│   ├── parsing.py            # PT symbol parsing and asset detection
+│   └── database.py           # SQLite persistence (scans, alerts, yield history)
 │
 ├── telegram_bot/
 │   ├── bot.py                # Bot entry point

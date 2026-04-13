@@ -9,6 +9,52 @@ for name, cid in CHAINS.items():
         CHAIN_NAMES[cid] = name.capitalize()
 
 
+def _build_morpho_url(chain_name: str, unique_key: str, collateral_symbol: str, loan_symbol: str) -> str:
+    """Build deep link for Morpho market.
+    
+    Format: https://app.morpho.org/{chain}/market/{unique_key}/{collateral_slug}-{loan_slug}
+    Example: https://app.morpho.org/ethereum/market/0x64d65c.../pt-avusd-14may2026-usdc
+    """
+    if not unique_key:
+        return f"https://app.morpho.org/{chain_name}"
+    
+    # Build slug: lowercase collateral-loan symbols
+    slug = f"{collateral_symbol}-{loan_symbol}".lower() if collateral_symbol and loan_symbol else ""
+    if slug:
+        return f"https://app.morpho.org/{chain_name}/market/{unique_key}/{slug}"
+    return f"https://app.morpho.org/{chain_name}/market/{unique_key}"
+
+
+# Euler network name mapping (our names → Euler's names)
+EULER_NETWORK_NAMES = {
+    "ethereum": "ethereum",
+    "arbitrum": "arbitrumone",
+    "base": "base",
+    "bnb": "bnbsmartchain",
+    "sonic": "sonic",
+    "optimism": "optimism",
+    "unichain": "unichain",
+    "plasma": "plasma",
+}
+
+
+def _build_euler_url(chain_name: str, vault_address: str, collateral_address: str) -> str:
+    """Build deep link for Euler V2 positions.
+    
+    Format: https://app.euler.finance/positions/{vault}/{collateral}?network={chain}
+    Example: https://app.euler.finance/positions/0xD5F9.../0x2daC...?network=ethereum
+    """
+    if not vault_address:
+        return "https://app.euler.finance"
+    
+    # Convert chain name to Euler network name
+    euler_network = EULER_NETWORK_NAMES.get(chain_name.lower(), chain_name.lower())
+    
+    if collateral_address:
+        return f"https://app.euler.finance/positions/{vault_address}/{collateral_address}?network={euler_network}"
+    return f"https://app.euler.finance/vault/{vault_address}?network={euler_network}"
+
+
 def _build_urls(c):
     """Build Pendle and protocol URLs from candidate data."""
     addr = c.get("address", "")
@@ -22,9 +68,18 @@ def _build_urls(c):
     if protocol == "aavev3":
         vault_url = "https://app.aave.com"
     elif protocol == "euler":
-        vault_url = "https://app.euler.finance"
+        vault_url = _build_euler_url(
+            chain_name,
+            c.get("euler_vault_address", ""),
+            c.get("euler_collateral_address", "")
+        )
     elif protocol == "morpho":
-        vault_url = f"https://app.morpho.org/{chain_name}"
+        vault_url = _build_morpho_url(
+            chain_name,
+            c.get("morpho_unique_key", ""),
+            c.get("morpho_collateral_symbol", ""),
+            c.get("morpho_loan_symbol", "")
+        )
     
     return pendle_url, vault_url
 
@@ -92,8 +147,6 @@ def format_candidate(rank, c):
             borrow_info = f" (💧 {fmt_tokens(borrow_liq_tokens, borrow_sym)})"
         elif borrow_liq_usd > 0:
             borrow_info = f" (💧 {fmt_usd(borrow_liq_usd)})"
-        elif borrow_liq_tokens > 0 and borrow_sym:
-            borrow_info = f" (💧 {fmt_tokens(borrow_liq_tokens, borrow_sym)})"
         else:
             borrow_info = ""
         

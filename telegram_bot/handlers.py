@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from telegram import Update, Bot
 from telegram.ext import ContextTypes
 
+from const import CHAINS, HELP, SPIKE_KEY_MAP, MSG_MAX_LENGTH
 from agents.loop_scout_agent import LoopScoutAgent
-from agents.config import ALLOWED_CHAT_IDS, CHAINS
+from agents.config import ALLOWED_CHAT_IDS
 from utils.database import (
     add_alert, get_alerts, delete_alert,
     check_alerts_for_candidates, get_scan_count,
@@ -21,88 +22,6 @@ from utils.formatting import fmt_pct, format_candidate
 log = logging.getLogger(__name__)
 
 _agent = None
-
-HELP_INTRO = (
-    "📖 *Help — Pendle Loop Scout*\n\n"
-    "*What is a loop?*\n"
-    "Buy a discounted PT on Pendle, deposit it as collateral on a money market "
-    "(AAVE, Morpho, Euler…), borrow the underlying asset, and buy more PT. "
-    "Repeat = leverage.\n"
-    "Max theoretical yield = implied APY × estimated leverage."
-)
-
-HELP_LOOP = (
-    "*🔍 Loop search:*\n"
-    "`/loop [count] [asset] [chain]`\n"
-    "• `/loop` — top 5 all assets, all chains\n"
-    "• `/loop stable` — stablecoins only\n"
-    "• `/loop 10 eth arbitrum` — top 10 ETH on Arbitrum\n"
-    "• `/loop btc` — BTC markets\n\n"
-    "Chains: `ethereum` `arbitrum` `base` `bnb` `optimism` `mantle` `sonic`\n"
-    "Assets: `stable` `eth` `btc`"
-)
-
-HELP_REPORTS = (
-    "*📊 Reports:*\n"
-    "• `/status` — instant report\n"
-    "• Silent scan every 10 min (no auto-report)"
-)
-
-HELP_ALERTS = (
-    "*🔔 Alerts — notified when theo yield > threshold:*\n"
-    "`/alert [asset] [chain] [yield%]`\n"
-    "• `/alert stable 15%` — alert if a stable exceeds 15%\n"
-    "• `/alert eth 20%` — alert if an ETH market exceeds 20%\n"
-    "• `/alert 25%` — all assets > 25%\n"
-    "• `/alert stable arbitrum 10%` — stables on Arbitrum > 10%\n"
-    "• `/alerts` — view active alerts\n"
-    "• `/delalert <id>` — delete an alert"
-)
-
-HELP_SPIKE = (
-    "*⚡ Spike detection — detects sudden yield increases:*\n"
-    "Compares current yield to the average of the last N scans.\n"
-    "Alerts if yield > average × multiplier.\n\n"
-    "• `/spike` — view current config\n"
-    "• `/spike window 10` — average over 10 scans (default: 30)\n"
-    "• `/spike multiplier 2.0` — alert if ×2.0 (default: ×1.5)\n"
-    "• `/spike min 0.10` — ignore yields < 10% (default: 5%)"
-)
-
-HELP_DATABASE = (
-    "*🗄️ Database:*\n"
-    "• `/export` — view database summary\n"
-    "• `/resetdb` — reset database (use `/resetdb confirm`)"
-)
-
-HELP_CHAT = (
-    "*🧹 Chat:*\n"
-    "• `/clear` — clear bot messages from chat (use `/clear confirm`)"
-)
-
-HELP_READING = (
-    "*📐 How to read results:*\n"
-    "• *Implied APY* — fixed rate of the PT\n"
-    "• *Underlying APY* — yield of the underlying asset\n"
-    "• *Spread* — implied - underlying (margin)\n"
-    "• *Borrow cost* — real borrow rate on the money market\n"
-    "• *Yield theo* — max estimated yield with leverage\n"
-    "• *Score* — composite /100 (spread, TVL, expiry, MM count)"
-)
-
-SEPARATOR = "━━━━━━━━━━━━━━━━━━━━━━"
-
-SPIKE_KEY_MAP = {
-    "window": ("spike_window", int),
-    "w": ("spike_window", int),
-    "multiplier": ("spike_multiplier", float),
-    "mult": ("spike_multiplier", float),
-    "x": ("spike_multiplier", float),
-    "min": ("spike_min_yield", float),
-    "min_yield": ("spike_min_yield", float),
-}
-
-MSG_MAX_LENGTH = 4096
 
 
 def _get_agent() -> LoopScoutAgent:
@@ -129,20 +48,16 @@ def _parse_loop_args(args: list[str]) -> tuple[int, str | None, str | None]:
     chain = None
 
     args_low = [a.lower() for a in args]
-
-    # Count: first integer
     for a in args:
         if a.isdigit():
             count = min(int(a), 20)
             break
 
-    # Asset family
     for a in args_low:
         if a in ("stable", "eth", "btc"):
             asset = a
             break
 
-    # Chain: match against CHAINS keys
     for a in args_low:
         if a in CHAINS:
             chain = a
@@ -155,7 +70,7 @@ def _parse_alert_args(args: str) -> tuple:
     """Parse alert command arguments. Returns (asset_filter, chain, min_yield)."""
     low = args.lower().strip()
 
-    min_yield = 0.10
+    min_yield = 0.15
     m = re.search(r"(\d+(?:\.\d+)?)\s*%", low)
     if m:
         min_yield = float(m.group(1)) / 100
@@ -208,10 +123,7 @@ def _format_spike_entry(index: int, spike: dict) -> str:
 
 
 def _format_spike_message(now: str, spikes: list) -> str:
-    lines = [
-        f"🚨 *SPIKE* — _{now}_\n",
-        f"_{len(spikes)} market(s) surging:_\n"
-    ]
+    lines = [f"🚨 *SPIKE* — _{now}_\n", f"_{len(spikes)} market(s) surging:_\n"]
     for i, s in enumerate(spikes[:5], 1):
         lines.append(_format_spike_entry(i, s))
     if len(spikes) > 5:
@@ -237,16 +149,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
-
     scans = get_scan_count()
-    sections = [
-        HELP_INTRO, SEPARATOR, HELP_LOOP, SEPARATOR,
-        HELP_REPORTS, SEPARATOR, HELP_ALERTS, SEPARATOR,
-        HELP_SPIKE, SEPARATOR, HELP_DATABASE, SEPARATOR,
-        HELP_CHAT, SEPARATOR, HELP_READING,
-        f"_{scans} scans in database._"
-    ]
-    await update.message.reply_text("\n\n".join(sections), parse_mode="Markdown")
+    await update.message.reply_text(f"{HELP}\n\n_{scans} scans in database._", parse_mode="Markdown")
 
 
 async def loop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -345,19 +249,13 @@ async def alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alerts = get_alerts(chat_id=update.effective_chat.id)
     if not alerts:
-        await update.message.reply_text(
-            "No alerts. `/alert stable 15%` to create one.",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text("No alerts. `/alert stable 15%` to create one.", parse_mode="Markdown")
         return
 
     lines = ["🔔 *Active alerts:*\n"]
     for a in alerts:
-        asset = a.get("asset_filter") or "all"
-        chain = a.get("chain") or "all"
-        lines.append(
-            f"• *#{a['id']}* — {asset} / {chain} / yield > {fmt_pct(a.get('min_yield', 0))}"
-        )
+        lines.append(f"• *#{a['id']}* — {a.get('asset_filter') or 'all'} / {a.get('chain') or 'all'} / "
+                     f"yield > {fmt_pct(a.get('min_yield', 0))}")
     lines.append("\n`/delalert <id>` to delete.")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -381,18 +279,12 @@ async def spike_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if len(args) < 2:
-        await update.message.reply_text(
-            "Usage: `/spike <window|multiplier|min> <value>`",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text("Usage: `/spike <window|multiplier|min> <value>`", parse_mode="Markdown")
         return
 
     key = args[0].lower()
     if key not in SPIKE_KEY_MAP:
-        await update.message.reply_text(
-            f"Unknown key: `{key}`. Use `window`, `multiplier`, or `min`.",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(f"Unknown key: `{key}`. Use `window`, `multiplier`, or `min`.", parse_mode="Markdown")
         return
 
     try:
@@ -458,9 +350,7 @@ async def export_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, c in enumerate(top, 1):
             vault = c.get("vault_name", "")
             vault_info = f" ({vault})" if vault else ""
-            lines.append(
-                f"   {i}. {c.get('name', '?')}{vault_info} — {fmt_pct(c.get('theoretical_yield', 0))}"
-            )
+            lines.append(f"   {i}. {c.get('name', '?')}{vault_info} — {fmt_pct(c.get('theoretical_yield', 0))}")
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 

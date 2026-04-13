@@ -1,69 +1,58 @@
 """Scoring for loop candidates."""
 
+from const import (
+    WEIGHT_SPREAD, WEIGHT_TVL, WEIGHT_DAYS, WEIGHT_BORROW,
+    WEIGHT_PT_DISCOUNT, WEIGHT_LEVERAGE, WEIGHT_MM_COUNT,
+    SPREAD_MAX_SCORE, SPREAD_CAP, TVL_MAX_SCORE, TVL_CAP,
+    BORROW_MAX, PT_DISCOUNT_MAX, LEVERAGE_MAX, CONTANGO_BONUS,
+    TVL_PENALTY_THRESHOLD, TVL_PENALTY,
+    DAYS_NEGATIVE, DAYS_VERY_SHORT, DAYS_SHORT, DAYS_MEDIUM, DAYS_LONG, DAYS_VERY_LONG,
+)
 
-def score_candidate(implied_apy, spread, tvl, liquidity, days, mm_count, 
+
+def score_candidate(implied_apy, spread, tvl, liquidity, days, mm_count,
                     borrow_cost=0, pt_discount=0, leverage=1, has_contango=False):
-    """
-    Score a loop candidate.
-    
-    Factors:
-    - spread: higher is better (raw yield opportunity)
-    - tvl/liquidity: higher is better
-    - days: medium-term (30-180d) is best
-    - borrow_cost: lower is better (max 30% realistic)
-    - pt_discount: higher is better (bigger discount = better entry)
-    - leverage: higher is better but capped at 10x
-    - mm_count: more money markets = more options
-    """
-    # Spread score (35% weight) - higher spread = better loop margin
-    s = min(spread / 0.05, 3.0) * 35
-    
-    # TVL score (15% weight) - liquidity matters
-    s += min(max(tvl, liquidity) / 10_000_000, 2.0) * 15
-    
-    # Days score (15% weight) - prefer medium term
+    """Score a loop candidate (0-100)."""
+    # Spread score
+    s = min(spread / SPREAD_MAX_SCORE, SPREAD_CAP) * WEIGHT_SPREAD
+
+    # TVL score
+    s += min(max(tvl, liquidity) / TVL_MAX_SCORE, TVL_CAP) * WEIGHT_TVL
+
+    # Days score - prefer medium term
     if days < 0:
-        s += 5
+        s += DAYS_NEGATIVE
     elif days < 7:
-        s += 2
+        s += DAYS_VERY_SHORT
     elif days < 30:
-        s += 10
+        s += DAYS_SHORT
     elif days <= 180:
-        s += 15
+        s += DAYS_MEDIUM
     elif days <= 365:
-        s += 10
+        s += DAYS_LONG
     else:
-        s += 6
-    
-    # Borrow cost score (20% weight) - lower is better
-    # Normalize: 0% borrow = max score, 30%+ = 0 score
-    if borrow_cost > 0.30:
-        borrow_score = 0
-    else:
-        borrow_score = (1 - borrow_cost / 0.30) * 20
+        s += DAYS_VERY_LONG
+
+    # Borrow cost score - lower is better
+    borrow_score = 0 if borrow_cost > BORROW_MAX else (1 - borrow_cost / BORROW_MAX) * WEIGHT_BORROW
     s += borrow_score
-    
-    # PT discount score (5% weight) - bigger discount = better entry
-    # PT discount is typically 0-20%, normalize to 0-5 points
-    s += min(pt_discount / 0.10, 1.0) * 5
-    
-    # Leverage score (5% weight) - higher leverage amplifies the spread
-    # Cap at 10x, normalize: 1x = 0, 10x = 5
-    if leverage > 1:
-        lev_score = min((leverage - 1) / 9, 1.0) * 5
-    else:
-        lev_score = 0
+
+    # PT discount score
+    s += min(pt_discount / PT_DISCOUNT_MAX, 1.0) * WEIGHT_PT_DISCOUNT
+
+    # Leverage score
+    lev_score = min((leverage - 1) / (LEVERAGE_MAX - 1), 1.0) * WEIGHT_LEVERAGE if leverage > 1 else 0
     s += lev_score
-    
-    # Money market count (5% weight) - more options = more reliable
+
+    # Money market count
     s += min(mm_count, 5) * 4
-    
+
     # Contango bonus
     if has_contango:
-        s += 10
-        
+        s += CONTANGO_BONUS
+
     # TVL penalty for low liquidity
-    if tvl < 500_000:
-        s -= 5
+    if tvl < TVL_PENALTY_THRESHOLD:
+        s -= TVL_PENALTY
 
     return round(max(s, 0), 2)

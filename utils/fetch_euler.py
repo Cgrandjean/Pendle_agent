@@ -7,8 +7,6 @@ from typing import Any
 
 import httpx
 
-from utils.parsing import is_pt_not_expired, is_pt_stablecoin
-
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
@@ -33,42 +31,42 @@ async def _gql(client: httpx.AsyncClient, subgraph: str, query: str) -> dict:
     return response.json()
 
 
-# Euler V2 APY is stored in RAY format (1e27) or BASIS (1e18)
+# Euler V2 APY is stored in RAY format (1e27)
 _RAY = 1e27
-_BASIS = 1e18
+
 
 def _ray_to_pct(raw: int) -> float:
-    """Convert Euler APY (RAY or BASIS format) to percentage."""
+    """Convert Euler APY (RAY format) to percentage."""
     if raw > 1e20:
         return raw / _RAY * 100
-    elif raw > 1e14:
-        return raw / _BASIS * 100
     return 0.0
 
 
 async def fetch_euler_data(
     chain_ids: list[int] | None = None,
-    min_cash_or_borrows: float = 100,
+    min_borrow_apy: float = 0,
+    min_cash: float = 100,
 ) -> dict[str, Any]:
-    """Fetch PT vaults and stablecoin vaults from Euler V2 across multiple chains (async).
+    """Fetch PT vaults and borrowable vaults from Euler V2 across multiple chains (async).
 
     Args:
         chain_ids: List of chain IDs to query. Defaults to all supported Euler chains.
-        min_cash_or_borrows: Minimum cash or borrows (in token units) to include a vault.
+        min_borrow_apy: Minimum borrow APY (in %) to include a vault.
+        min_cash: Minimum cash (in token units) to include a vault.
 
     Returns:
         {
-            "pt_vaults": [{symbol, name, asset, cash, borrows, borrow_apy_pct, collaterals, chain_id}, ...],
-            "stable_vaults": [{symbol, name, asset, cash, borrows, borrow_apy_pct, collaterals_count, collaterals, chain_id}, ...],
+            "pt_vaults": [{symbol, name, asset, evault, dToken, cash, borrows, borrow_apy_pct, chain_id}, ...],
+            "borrowable_vaults": [{symbol, name, asset, evault, cash, borrows, borrow_apy_pct, pt_collaterals, chain_id}, ...],
+            "summary": {total_vaults, total_pt_vaults, total_borrowable, with_pt_collateral}
         }
     """
     if chain_ids is None:
         chain_ids = list(EULER_SUBGRAPHS.keys())
 
-    pt_vaults: list[dict] = []
-    stable_vaults: list[dict] = []
-
-    stable_kw = ["usdc", "usdt", "usds", "usde", "pyusd", "gho"]
+    all_pt_vaults: list[dict] = []
+    all_borrowable: list[dict] = []
+    total_vaults = 0
 
     async with httpx.AsyncClient(headers=_HEADERS) as client:
         for chain_id in chain_ids:
@@ -80,20 +78,20 @@ async def fetch_euler_data(
             try:
                 result = await _gql(client, subgraph, """
                 {
-                  eulerVaults(first: 1000) {
+                  eulerVaults(first: 500) {
                     id
                     name
                     symbol
                     asset
                     decimals
                     evault
+                    dToken
                     collaterals
                     state {
                       totalBorrows
                       cash
                       borrowApy
                       supplyApy
-                      interestRate
                     }
                   }
                 }
@@ -107,52 +105,181 @@ async def fetch_euler_data(
                 continue
 
             vaults = result.get("data", {}).get("eulerVaults", [])
+            total_vaults += len(vaults)
 
+            if not vaults:
+                continue
+
+            # Build lookup maps by ALL identifiers
+            vault_by_id = {}
+            vault_by_evault = {}
+            vault_by_dtoken = {}
+            vault_by_asset = {}
+            vault_by_symbol_lower = {}
+            
+            for v in vaults:
+                vid = (v.get("id") or "").lower()
+                ev = (v.get("evault") or "").lower()
+                dt = (v.get("dToken") or "").lower()
+                asset = (v.get("asset") or "").lower()
+                sym = (v.get("symbol") or "").lower()
+                
+                if vid:
+                    vault_by_id[vid] = v
+                if ev:
+                    vault_by_evault[ev] = v
+                if dt:
+                    vault_by_dtoken[dt] = v
+                if asset:
+                    vault_by_asset[asset] = v
+                if sym:
+                    vault_by_symbol_lower[sym] = v
+
+            # First pass: collect all PT vaults
+            chain_pt_vaults = []
             for v in vaults:
                 symbol = v.get("symbol", "")
-                name = v.get("name", "")
+                if "PT" not in symbol.upper():
+                    continue
+                    
                 state = v.get("state") or {}
                 decimals = int(v.get("decimals") or 18)
                 borrow_apy_raw = int(state.get("borrowApy") or 0)
                 cash_raw = int(state.get("cash") or 0)
                 borrows_raw = int(state.get("totalBorrows") or 0)
-                collaterals = v.get("collaterals") or []
 
-                borrow_apy_pct = _ray_to_pct(borrow_apy_raw)
-                cash_human = cash_raw / (10 ** decimals)
-                borrows_human = borrows_raw / (10 ** decimals)
-
-                has_collaterals = len(collaterals) > 0
-                has_activity = cash_human > 1000 or borrows_human > 100
-
-                base = {
+                pt_vault = {
                     "symbol": symbol,
-                    "name": name,
+                    "name": v.get("name", ""),
                     "asset": v.get("asset", ""),
                     "evault": v.get("evault", ""),
-                    "cash": cash_human,
-                    "borrows": borrows_human,
-                    "borrow_apy_pct": borrow_apy_pct,
-                    "collaterals": collaterals,
+                    "dToken": v.get("dToken", ""),
+                    "decimals": decimals,
+                    "cash": cash_raw / (10 ** decimals),
+                    "borrows": borrows_raw / (10 ** decimals),
+                    "borrow_apy_pct": _ray_to_pct(borrow_apy_raw),
                     "chain_id": chain_id,
                 }
+                chain_pt_vaults.append(pt_vault)
+                all_pt_vaults.append(pt_vault)
 
-                # PT vaults: must be non-expired stablecoin PT, have collaterals, and real activity
-                if "PT" in symbol.upper() and is_pt_not_expired(symbol) and is_pt_stablecoin(symbol) and has_collaterals and has_activity:
-                    pt_vaults.append({**base})
+            # Build PT lookup by evault, dToken, asset (all identifiers)
+            pt_by_evault = {pv["evault"].lower(): pv for pv in chain_pt_vaults if pv["evault"]}
+            pt_by_dtoken = {pv["dToken"].lower(): pv for pv in chain_pt_vaults if pv["dToken"]}
+            pt_by_asset = {pv["asset"].lower(): pv for pv in chain_pt_vaults if pv["asset"]}
+            pt_by_symbol = {pv["symbol"].lower(): pv for pv in chain_pt_vaults}
 
-                # Stablecoin vaults
-                if any(kw in symbol.lower() for kw in stable_kw) and (
-                    cash_human > min_cash_or_borrows or borrows_human > min_cash_or_borrows
-                ):
-                    stable_vaults.append({
-                        **base,
-                        "collaterals_count": len(collaterals),
-                    })
+            # Second pass: collect ALL borrowable vaults that have PT as collateral
+            for v in vaults:
+                state = v.get("state") or {}
+                decimals = int(v.get("decimals") or 18)
+                borrow_apy_raw = int(state.get("borrowApy") or 0)
+                borrow_apy_pct = _ray_to_pct(borrow_apy_raw)
+                cash_raw = int(state.get("cash") or 0)
+                borrows_raw = int(state.get("totalBorrows") or 0)
+                cash_human = cash_raw / (10 ** decimals)
 
-    # Sort stable vaults by total activity
-    stable_vaults.sort(key=lambda x: x["cash"] + x["borrows"], reverse=True)
+                # Skip if below thresholds
+                if borrow_apy_pct < min_borrow_apy and cash_human < min_cash:
+                    continue
 
-    logger.info("Euler: %d PT vaults, %d stable vaults across %d chains",
-                len(pt_vaults), len(stable_vaults), len(chain_ids))
-    return {"pt_vaults": pt_vaults, "stable_vaults": stable_vaults}
+                collaterals = v.get("collaterals") or []
+                if not collaterals:
+                    continue
+                
+                # Find PT collaterals by resolving evault OR dToken addresses
+                pt_collaterals = []
+                for col_addr in collaterals:
+                    col_lower = col_addr.lower()
+                    
+                    # Try evault match first (most common)
+                    pt_vault = pt_by_evault.get(col_lower)
+                    if pt_vault:
+                        pt_collaterals.append({
+                            "symbol": pt_vault["symbol"],
+                            "evault": pt_vault["evault"],
+                            "dToken": pt_vault["dToken"],
+                            "asset": pt_vault["asset"],
+                            "match_type": "evault",
+                        })
+                        continue
+                    
+                    # Try dToken match
+                    pt_vault = pt_by_dtoken.get(col_lower)
+                    if pt_vault:
+                        pt_collaterals.append({
+                            "symbol": pt_vault["symbol"],
+                            "evault": pt_vault["evault"],
+                            "dToken": pt_vault["dToken"],
+                            "asset": pt_vault["asset"],
+                            "match_type": "dToken",
+                        })
+                        continue
+                    
+                    # Try asset match
+                    pt_vault = pt_by_asset.get(col_lower)
+                    if pt_vault:
+                        pt_collaterals.append({
+                            "symbol": pt_vault["symbol"],
+                            "evault": pt_vault["evault"],
+                            "dToken": pt_vault["dToken"],
+                            "asset": pt_vault["asset"],
+                            "match_type": "asset",
+                        })
+                        continue
+                    
+                    # Try by looking up in all vaults and checking if it's a PT
+                    for lookup_map in [vault_by_id, vault_by_evault, vault_by_dtoken, vault_by_asset]:
+                        potential = lookup_map.get(col_lower)
+                        if potential and "PT" in potential.get("symbol", "").upper():
+                            pt_collaterals.append({
+                                "symbol": potential.get("symbol", ""),
+                                "evault": potential.get("evault", ""),
+                                "dToken": potential.get("dToken", ""),
+                                "asset": potential.get("asset", ""),
+                                "match_type": "lookup",
+                            })
+                            break
+
+                # Only include if it has PT collateral
+                if not pt_collaterals:
+                    continue
+
+                borrowable_vault = {
+                    "symbol": v.get("symbol", ""),
+                    "name": v.get("name", ""),
+                    "asset": v.get("asset", ""),
+                    "evault": v.get("evault", ""),
+                    "dToken": v.get("dToken", ""),
+                    "decimals": decimals,
+                    "cash": cash_human,
+                    "borrows": borrows_raw / (10 ** decimals),
+                    "borrow_apy_pct": borrow_apy_pct,
+                    "collaterals": collaterals,
+                    "collaterals_count": len(collaterals),
+                    "pt_collaterals": pt_collaterals,
+                    "chain_id": chain_id,
+                }
+                all_borrowable.append(borrowable_vault)
+
+    # Sort by borrow APY
+    all_borrowable.sort(key=lambda x: x["borrow_apy_pct"], reverse=True)
+
+    # Count vaults with PT collateral
+    with_pt = len(all_borrowable)
+
+    logger.info(
+        "Euler: %d total vaults, %d PT vaults, %d borrowable w/PT collateral across %d chains",
+        total_vaults, len(all_pt_vaults), with_pt, len(chain_ids)
+    )
+
+    return {
+        "pt_vaults": all_pt_vaults,
+        "borrowable_vaults": all_borrowable,
+        "summary": {
+            "total_vaults": total_vaults,
+            "total_pt_vaults": len(all_pt_vaults),
+            "total_borrowable_with_pt": with_pt,
+            "chains_queried": len(chain_ids),
+        }
+    }

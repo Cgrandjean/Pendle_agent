@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from utils.parsing import is_pt_not_expired, is_pt_stablecoin
+from utils.parsing import is_pt_not_expired
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ async def fetch_aave_data(chain_ids: list[int] | None = None) -> dict[str, Any]:
                     si = r.get("supplyInfo") or {}
                     bi = r.get("borrowInfo") or {}
 
-                    if "PT" in sym and is_pt_not_expired(sym) and is_pt_stablecoin(sym):
+                    if "PT" in sym and is_pt_not_expired(sym):
                         ltv_obj = si.get("maxLTV") or {}
                         ltv = float(ltv_obj.get("value") or 0) if isinstance(ltv_obj, dict) else 0
                         liq_obj = si.get("liquidationThreshold") or {}
