@@ -90,7 +90,9 @@ def _format_alert_message(now: str, matches: list) -> str:
 def _format_spike_entry(index: int, spike: dict) -> str:
     vault_name = spike.get("vault_name", "")
     leverage = spike.get("leverage", 0)
-    implied = spike.get("implied_apy", 0)
+    current_yield = spike.get("current_yield", 0)
+    sma_yield = spike.get("sma_yield", 0)
+    spike_ratio = spike.get("spike_ratio", 0)
 
     entry = f"*{index}. {spike.get('name', '?')}*\n"
 
@@ -99,8 +101,8 @@ def _format_spike_entry(index: int, spike: dict) -> str:
         entry += f"   🔁 Vault: {vault_name}{lev_str}\n"
 
     entry += (
-        f"   📊 Implied: {fmt_pct(implied)} → Theo: {fmt_pct(spike['current_yield'])}\n"
-        f"   ⚡ ×{spike['spike_ratio']:.1f} vs avg {fmt_pct(spike['sma_yield'])}"
+        f"   📊 Theo: {fmt_pct(current_yield)} (avg: {fmt_pct(sma_yield)})\n"
+        f"   ⚡ ×{spike_ratio:.1f} spike"
     )
     return entry
 
