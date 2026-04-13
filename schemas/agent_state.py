@@ -6,7 +6,6 @@ from typing import TypedDict
 class LoopScoutState(TypedDict, total=False):
     chain_filter: int | None
     chain_name: str | None
-    asset_filter: str | None
     count: int
     markets: list[dict]
     aave_data: dict

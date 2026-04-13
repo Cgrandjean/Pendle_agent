@@ -158,7 +158,6 @@ def format_candidate(rank, c):
         lines.append(f"   🧮 Theo: {fmt_pct(theo)}")
 
     lines.append(f"   📅 Yield at expiry: {fmt_pct(yield_at_expiry)} ({days:.0f}d)")
-    lines.append(f"   ⭐ {c.get('score', 0)}/100")
 
     # Compute URLs on the fly
     pendle_url, vault_url = _build_urls(c)
@@ -168,11 +167,10 @@ def format_candidate(rank, c):
     return "\n".join(lines) + "\n"
 
 
-def no_results_message(chain_name, asset_filter):
+def no_results_message(chain_name):
     chain = (chain_name or "all chains").capitalize()
-    asset = asset_filter or "all assets"
     return (
-        f"🔍 Nothing found for *{chain} / {asset}*.\n\n"
-        "Try a different chain or fewer filters.\n"
+        f"🔍 Nothing found for *{chain}*.\n\n"
+        "Try a different chain.\n"
         "Ex: `/loop top 5 eth arbitrum`"
     )

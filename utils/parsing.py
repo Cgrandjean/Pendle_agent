@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone, timedelta
 
-from const import ASSET_FAMILIES, MONTH_MAP, DATE_RE
+from const import MONTH_MAP, DATE_RE
 
 
 def parse_pt_expiry_from_symbol(symbol: str) -> datetime | None:
@@ -40,21 +40,6 @@ def days_to_expiry(expiry_str: str | None) -> float:
         return max((exp - datetime.now(timezone.utc)).total_seconds() / 86400, 0)
     except Exception:
         return -1
-
-
-def matches_asset_family(name: str, family: str) -> bool:
-    """Check if a market name matches the given asset family."""
-    low = name.lower()
-    return any(kw in low for kw in ASSET_FAMILIES.get(family, []))
-
-
-def detect_asset_family(name: str) -> str:
-    """Detect asset family from market name."""
-    low = name.lower()
-    for family, keywords in ASSET_FAMILIES.items():
-        if any(kw in low for kw in keywords):
-            return family
-    return "other"
 
 
 def extract_ticker(symbol: str) -> str:

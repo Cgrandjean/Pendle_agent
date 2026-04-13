@@ -41,33 +41,26 @@ def _is_authorized(chat_id: int) -> bool:
     return not ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
 
 
-def _parse_loop_args(args: list[str]) -> tuple[int, str | None, str | None]:
-    """Parse /loop command args. Returns (count, asset, chain)."""
+def _parse_loop_args(args: list[str]) -> tuple[int, str | None]:
+    """Parse /loop command args. Returns (count, chain)."""
     count = 5
-    asset = None
     chain = None
 
-    args_low = [a.lower() for a in args]
     for a in args:
         if a.isdigit():
             count = min(int(a), 20)
             break
 
-    for a in args_low:
-        if a in ("stable", "eth", "btc"):
-            asset = a
-            break
-
-    for a in args_low:
+    for a in [a.lower() for a in args]:
         if a in CHAINS:
             chain = a
             break
 
-    return count, asset, chain
+    return count, chain
 
 
 def _parse_alert_args(args: str) -> tuple:
-    """Parse alert command arguments. Returns (asset_filter, chain, min_yield)."""
+    """Parse alert command arguments. Returns (chain, min_yield)."""
     low = args.lower().strip()
 
     min_yield = 0.15
@@ -79,10 +72,9 @@ def _parse_alert_args(args: str) -> tuple:
         if m and float(m.group(1)) < 1:
             min_yield = float(m.group(1))
 
-    asset_filter = next((kw for kw in ["stable", "eth", "btc"] if kw in low), None)
     chain = next((kw for kw in CHAINS if kw in low), None)
 
-    return asset_filter, chain, min_yield
+    return chain, min_yield
 
 
 def _format_alert_message(now: str, matches: list) -> str:
@@ -96,14 +88,9 @@ def _format_alert_message(now: str, matches: list) -> str:
 
 
 def _format_spike_entry(index: int, spike: dict) -> str:
-    mms = spike.get("money_markets", [])
-    if isinstance(mms, str):
-        mms = [mms] if mms else []
-
     vault_name = spike.get("vault_name", "")
     leverage = spike.get("leverage", 0)
     implied = spike.get("implied_apy", 0)
-    borrow_detail = spike.get("borrow_detail", "")
 
     entry = f"*{index}. {spike.get('name', '?')}*\n"
 
@@ -111,13 +98,9 @@ def _format_spike_entry(index: int, spike: dict) -> str:
         lev_str = f" ({leverage}x)" if leverage > 0 else ""
         entry += f"   🔁 Vault: {vault_name}{lev_str}\n"
 
-    if borrow_detail and borrow_detail != "Automated loop":
-        entry += f"   💵 {borrow_detail}\n"
-
     entry += (
         f"   📊 Implied: {fmt_pct(implied)} → Theo: {fmt_pct(spike['current_yield'])}\n"
-        f"   ⚡ ×{spike['spike_ratio']:.1f} vs avg {fmt_pct(spike['sma_yield'])}\n"
-        f"   🏦 {', '.join(mms) or 'N/A'}"
+        f"   ⚡ ×{spike['spike_ratio']:.1f} vs avg {fmt_pct(spike['sma_yield'])}"
     )
     return entry
 
@@ -158,13 +141,13 @@ async def loop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     args = list(context.args) if context.args else []
-    count, asset, chain = _parse_loop_args(args)
+    count, chain = _parse_loop_args(args)
 
     thinking = await update.message.reply_text("⏳ Scanning…", parse_mode="Markdown")
     agent = _get_agent()
 
     try:
-        resp = await agent.run(count=count, asset=asset, chain=chain)
+        resp = await agent.run(count=count, chain=chain)
         if len(resp) <= MSG_MAX_LENGTH:
             await thinking.edit_text(resp, parse_mode="Markdown")
         else:
@@ -192,7 +175,6 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     candidates.sort(key=lambda c: c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0, reverse=True)
     top = candidates[:10]
 
-    from utils.database import export_db_summary
     summary = export_db_summary()
     last_scan = summary.get("last_scan", {})
     ts = last_scan.get("ts", "?")
@@ -221,23 +203,22 @@ async def alert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = " ".join(context.args) if context.args else ""
     if not args:
         await update.message.reply_text(
-            "⚙️ `/alert [asset] [chain] [yield%]`\n\n"
-            "Ex: `/alert stable 15%`, `/alert eth 20%`, `/alert 25%`",
+            "⚙️ `/alert [chain] [yield%]`\n\n"
+            "Ex: `/alert eth 15%`, `/alert 20%`",
             parse_mode="Markdown",
         )
         return
 
-    asset_filter, chain, min_yield = _parse_alert_args(args)
+    chain, min_yield = _parse_alert_args(args)
     alert_id = add_alert(
         chat_id=update.effective_chat.id,
-        asset_filter=asset_filter,
         chain=chain,
         min_yield=min_yield,
     )
 
     await update.message.reply_text(
         f"✅ *Alert #{alert_id}*\n"
-        f"Asset: {asset_filter or 'all'} | Chain: {chain or 'all'}\n"
+        f"Chain: {chain or 'all'}\n"
         f"Min theo yield: {fmt_pct(min_yield)}",
         parse_mode="Markdown",
     )
@@ -249,13 +230,12 @@ async def alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     alerts = get_alerts(chat_id=update.effective_chat.id)
     if not alerts:
-        await update.message.reply_text("No alerts. `/alert stable 15%` to create one.", parse_mode="Markdown")
+        await update.message.reply_text("No alerts. `/alert eth 15%` to create one.", parse_mode="Markdown")
         return
 
     lines = ["🔔 *Active alerts:*\n"]
     for a in alerts:
-        lines.append(f"• *#{a['id']}* — {a.get('asset_filter') or 'all'} / {a.get('chain') or 'all'} / "
-                     f"yield > {fmt_pct(a.get('min_yield', 0))}")
+        lines.append(f"• *#{a['id']}* — {a.get('chain') or 'all'} / yield > {fmt_pct(a.get('min_yield', 0))}")
     lines.append("\n`/delalert <id>` to delete.")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -415,7 +395,8 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     try:
-        await agent.run(count=5, asset="stable")
+        # Scan all markets (no asset filter)
+        await agent.run(count=5, chain=None)
     except Exception as e:
         log.exception("Scan failed")
         return

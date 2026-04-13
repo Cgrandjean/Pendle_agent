@@ -22,27 +22,30 @@ def _db():
             CREATE TABLE IF NOT EXISTS scans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL, query TEXT, chain TEXT,
-                asset_filter TEXT, risk TEXT, total_candidates INTEGER DEFAULT 0
+                total_candidates INTEGER DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS candidates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_id INTEGER NOT NULL, name TEXT, address TEXT, chain_id INTEGER,
                 implied_apy REAL, underlying_apy REAL, spread REAL, borrow_cost REAL,
-                theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL, score REAL,
-                asset_family TEXT, money_markets TEXT, has_contango INTEGER DEFAULT 0,
-                loop_paths TEXT, vault_name TEXT, vault_id TEXT, borrow_detail TEXT,
+                theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL,
+                liquidity REAL, days_to_expiry REAL,
+                loop_paths TEXT, vault_name TEXT, vault_id TEXT,
+                morpho_unique_key TEXT, morpho_collateral_symbol TEXT, morpho_loan_symbol TEXT,
+                euler_vault_address TEXT, euler_collateral_address TEXT,
+                borrow_liquidity_usd REAL, borrow_liquidity_tokens REAL, borrow_token_symbol TEXT,
                 FOREIGN KEY (scan_id) REFERENCES scans(id)
             );
             CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL, asset_filter TEXT, chain TEXT,
-                min_spread REAL DEFAULT 0.03, min_yield REAL DEFAULT 0,
+                chat_id INTEGER NOT NULL, chain TEXT,
+                min_yield REAL DEFAULT 0,
                 enabled INTEGER DEFAULT 1, created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS yield_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
-                name TEXT, asset_family TEXT, implied_apy REAL,
+                name TEXT, implied_apy REAL,
                 theoretical_yield REAL, borrow_cost REAL
             );
             CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
@@ -65,14 +68,19 @@ def _now():
 
 # -- Scans --
 
-def _ensure_vault_columns(conn):
+def _ensure_extra_columns(conn):
     """Ensure all columns exist in the candidates table (for migrations)."""
-    for col, col_type in [
-        ("loop_paths", "TEXT"),
-        ("vault_name", "TEXT"),
-        ("vault_id", "TEXT"),
-        ("borrow_detail", "TEXT"),
-    ]:
+    extra_cols = [
+        ("morpho_unique_key", "TEXT"),
+        ("morpho_collateral_symbol", "TEXT"),
+        ("morpho_loan_symbol", "TEXT"),
+        ("euler_vault_address", "TEXT"),
+        ("euler_collateral_address", "TEXT"),
+        ("borrow_liquidity_usd", "REAL"),
+        ("borrow_liquidity_tokens", "REAL"),
+        ("borrow_token_symbol", "TEXT"),
+    ]
+    for col, col_type in extra_cols:
         try:
             info = conn.execute("PRAGMA table_info(candidates)").fetchall()
             col_names = [r[1] for r in info]
@@ -83,13 +91,13 @@ def _ensure_vault_columns(conn):
             log.warning("Failed to add column %s: %s", col, e)
 
 
-def save_scan(query, chain, asset_filter, candidates):
+def save_scan(query, chain, candidates):
     conn = _db()
-    _ensure_vault_columns(conn)
+    _ensure_extra_columns(conn)
     
     cur = conn.execute(
-        "INSERT INTO scans (ts, query, chain, asset_filter, total_candidates) VALUES (?,?,?,?,?)",
-        (_now(), query, chain, asset_filter, len(candidates)))
+        "INSERT INTO scans (ts, query, chain, total_candidates) VALUES (?,?,?,?)",
+        (_now(), query, chain, len(candidates)))
     sid = cur.lastrowid
 
     for c in candidates:
@@ -97,20 +105,25 @@ def save_scan(query, chain, asset_filter, candidates):
             sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
             c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
             c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
-            c.get("estimated_max_leverage",1), c.get("tvl",0), c.get("score",0),
-            c.get("asset_family",""), "[]",
-            0,
+            c.get("estimated_max_leverage",1), c.get("tvl",0),
+            c.get("liquidity",0), c.get("days_to_expiry",0),
             c.get("loop_paths", ""),
-            c.get("vault_name",""), c.get("vault_id",""), c.get("borrow_detail", "")
+            c.get("vault_name",""), c.get("vault_id",""),
+            c.get("morpho_unique_key",""), c.get("morpho_collateral_symbol",""), c.get("morpho_loan_symbol",""),
+            c.get("euler_vault_address",""), c.get("euler_collateral_address",""),
+            c.get("borrow_liquidity_usd",0), c.get("borrow_liquidity_tokens",0), c.get("borrow_token_symbol",""),
         )
         try:
             conn.execute(
                 """INSERT INTO candidates
                    (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
-                    borrow_cost, theoretical_yield, estimated_leverage, tvl, score,
-                    asset_family, money_markets, has_contango, loop_paths,
-                    vault_name, vault_id, borrow_detail)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    borrow_cost, theoretical_yield, estimated_leverage, tvl,
+                    liquidity, days_to_expiry, loop_paths,
+                    vault_name, vault_id,
+                    morpho_unique_key, morpho_collateral_symbol, morpho_loan_symbol,
+                    euler_vault_address, euler_collateral_address,
+                    borrow_liquidity_usd, borrow_liquidity_tokens, borrow_token_symbol)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 values)
         except Exception as e:
             log.error("DB insert failed: %s", e)
@@ -121,11 +134,9 @@ def save_scan(query, chain, asset_filter, candidates):
     return sid
 
 
-def get_last_scan_candidates(asset_filter=None, chain=None):
+def get_last_scan_candidates(chain=None):
     conn = _db()
     where, params = [], []
-    if asset_filter:
-        where.append("s.asset_filter = ?"); params.append(asset_filter)
     if chain:
         where.append("s.chain = ?"); params.append(chain)
 
@@ -137,11 +148,6 @@ def get_last_scan_candidates(asset_filter=None, chain=None):
     for r in conn.execute(
         "SELECT * FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC", (row["id"],)).fetchall():
         d = dict(r)
-        # Parse JSON fields back to Python objects
-        try:
-            d['money_markets'] = json.loads(d.get('money_markets', '[]'))
-        except (json.JSONDecodeError, TypeError):
-            d['money_markets'] = []
         try:
             d['loop_paths'] = json.loads(d.get('loop_paths', '[]'))
         except (json.JSONDecodeError, TypeError):
@@ -157,11 +163,11 @@ def get_scan_count():
 
 # -- Alerts --
 
-def add_alert(chat_id, asset_filter=None, chain=None, min_spread=0, min_yield=0.10):
+def add_alert(chat_id, chain=None, min_yield=0.10):
     conn = _db()
     cur = conn.execute(
-        "INSERT INTO alerts (chat_id, asset_filter, chain, min_spread, min_yield, enabled, created_at) VALUES (?,?,?,?,?,1,?)",
-        (chat_id, asset_filter, chain, min_spread, min_yield, _now()))
+        "INSERT INTO alerts (chat_id, chain, min_yield, enabled, created_at) VALUES (?,?,?,1,?)",
+        (chat_id, chain, min_yield, _now()))
     conn.commit()
     return cur.lastrowid
 
@@ -192,8 +198,6 @@ def check_alerts_for_candidates(candidates):
         cid = alert["chat_id"]
         matching = []
         for c in candidates:
-            if alert.get("asset_filter") and c.get("asset_family") != alert["asset_filter"]:
-                continue
             theo = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
             if theo < alert.get("min_yield", 0):
                 continue
@@ -213,8 +217,8 @@ def save_yield_history(candidates):
         if not addr:
             continue
         conn.execute(
-            "INSERT INTO yield_history (ts,address,chain_id,name,asset_family,implied_apy,theoretical_yield,borrow_cost) VALUES (?,?,?,?,?,?,?,?)",
-            (now, addr, c.get("chain_id"), c.get("name",""), c.get("asset_family",""),
+            "INSERT INTO yield_history (ts,address,chain_id,name,implied_apy,theoretical_yield,borrow_cost) VALUES (?,?,?,?,?,?,?)",
+            (now, addr, c.get("chain_id"), c.get("name",""),
              c.get("implied_apy",0),
              c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0,
              c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0))
@@ -237,7 +241,7 @@ def set_setting(key, value):
 
 
 def get_spike_config():
-    from agents.config import SPIKE_WINDOW_DEFAULT, SPIKE_MULTIPLIER_DEFAULT, SPIKE_MIN_YIELD_DEFAULT
+    from const import SPIKE_WINDOW_DEFAULT, SPIKE_MULTIPLIER_DEFAULT, SPIKE_MIN_YIELD_DEFAULT
     return {
         "window": int(get_setting("spike_window", SPIKE_WINDOW_DEFAULT)),
         "multiplier": float(get_setting("spike_multiplier", SPIKE_MULTIPLIER_DEFAULT)),
@@ -262,27 +266,30 @@ def reset_db():
         CREATE TABLE IF NOT EXISTS scans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, query TEXT, chain TEXT,
-            asset_filter TEXT, risk TEXT, total_candidates INTEGER DEFAULT 0
+            total_candidates INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_id INTEGER NOT NULL, name TEXT, address TEXT, chain_id INTEGER,
             implied_apy REAL, underlying_apy REAL, spread REAL, borrow_cost REAL,
-            theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL, score REAL,
-            asset_family TEXT, money_markets TEXT, has_contango INTEGER DEFAULT 0,
-            loop_paths TEXT, vault_name TEXT, vault_id TEXT, borrow_detail TEXT,
+            theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL,
+            liquidity REAL, days_to_expiry REAL,
+            loop_paths TEXT, vault_name TEXT, vault_id TEXT,
+            morpho_unique_key TEXT, morpho_collateral_symbol TEXT, morpho_loan_symbol TEXT,
+            euler_vault_address TEXT, euler_collateral_address TEXT,
+            borrow_liquidity_usd REAL, borrow_liquidity_tokens REAL, borrow_token_symbol TEXT,
             FOREIGN KEY (scan_id) REFERENCES scans(id)
         );
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL, asset_filter TEXT, chain TEXT,
-            min_spread REAL DEFAULT 0.03, min_yield REAL DEFAULT 0,
+            chat_id INTEGER NOT NULL, chain TEXT,
+            min_yield REAL DEFAULT 0,
             enabled INTEGER DEFAULT 1, created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS yield_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
-            name TEXT, asset_family TEXT, implied_apy REAL,
+            name TEXT, implied_apy REAL,
             theoretical_yield REAL, borrow_cost REAL
         );
         CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
@@ -367,18 +374,13 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
         if ratio >= multiplier:
             spikes.append({
                 "name": c.get("name", "?"), "address": addr,
-                "chain_id": c.get("chain_id"), "asset_family": c.get("asset_family", ""),
+                "chain_id": c.get("chain_id"), 
                 "current_yield": cur, "sma_yield": sma, "spike_ratio": ratio,
                 "implied_apy": c.get("implied_apy", 0),
                 "borrow_cost": c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0,
-                "money_markets": c.get("money_markets", []),
-                "has_contango": c.get("has_contango", False),
-                # Vault details
                 "vault_name": c.get("vault_name", ""),
                 "vault_id": c.get("vault_id", ""),
                 "leverage": c.get("estimated_max_leverage", 0),
-                "ltv": c.get("estimated_ltv", 0),
-                "borrow_detail": c.get("borrow_detail", ""),
             })
 
     spikes.sort(key=lambda s: s["spike_ratio"], reverse=True)

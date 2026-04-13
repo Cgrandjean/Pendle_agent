@@ -8,11 +8,9 @@ from agents.config import MIN_TVL, MIN_DAYS_TO_EXPIRY, CHAINS, MIN_BORROW_LIQUID
 from utils.fetch_pendle import fetch_all_markets as _fetch_all_pendle_markets
 from schemas.agent_state import LoopScoutState
 from utils.parsing import (
-    days_to_expiry, matches_asset_family, detect_asset_family,
-    extract_ticker, pt_matches_market,
+    days_to_expiry, pt_matches_market,
 )
 from utils.formatting import format_candidate, no_results_message
-from utils.scoring import score_candidate
 from utils.fetch_aave import fetch_aave_data
 from utils.fetch_morpho import fetch_morpho_data
 from utils.fetch_euler import fetch_euler_data
@@ -21,11 +19,10 @@ from utils.database import save_scan, save_yield_history
 log = logging.getLogger(__name__)
 
 # Default LTV by asset family
-DEFAULT_LTV = {"stable": 0.90, "eth": 0.80, "btc": 0.75}
 DEFAULT_LTV_FALLBACK = 0.70
 
 
-def _build_candidate(market, theo_yield, borrow, ltv, leverage, days, family, spread, score, protocol, vault_name, 
+def _build_candidate(market, theo_yield, borrow, ltv, leverage, days, spread, protocol, vault_name, 
                      borrow_liquidity=0, borrow_liquidity_tokens=0, borrow_token_symbol="",
                      morpho_unique_key="", morpho_collateral_symbol="", morpho_loan_symbol="",
                      euler_vault_address="", euler_collateral_address="") -> dict:
@@ -51,8 +48,6 @@ def _build_candidate(market, theo_yield, borrow, ltv, leverage, days, family, sp
         "borrow_liquidity_usd": borrow_liquidity,
         "borrow_liquidity_tokens": borrow_liquidity_tokens,
         "borrow_token_symbol": borrow_token_symbol,
-        "asset_family": family,
-        "score": score,
         # Protocol
         "vault_name": vault_name,
         "vault_id": protocol,
@@ -114,37 +109,23 @@ class LoopScoutAgent:
     async def skim_euler(self, state):
         data = await fetch_euler_data()
         log.info("Euler: %d PT vaults, %d stable vaults",
-                 len(data.get("pt_vaults", [])), len(data.get("stable_vaults", [])))
+                 len(data.get("pt_vaults", [])), len(data.get("borrowable_vaults", [])))
         return {"euler_data": data}
 
     # -- Market collection --
 
     async def collect_markets(self, state):
         chain_id = state.get("chain_filter")
-        asset_filter = state.get("asset_filter")
         chain_name = state.get("chain_name")
 
         all_markets = await _fetch_all_pendle_markets(
-            chain_id, asset_filter, MIN_TVL, 0.001,
+            chain_id, None, MIN_TVL, 0.001,
         )
-        active = self._filter_markets(all_markets, asset_filter=None)
+        # Filter by expiry only
+        active = [m for m in all_markets if days_to_expiry(m.get("expiry")) >= MIN_DAYS_TO_EXPIRY]
 
         log.info("Markets: %d active / %d raw", len(active), len(all_markets))
         return {"markets": active, "chain_name": chain_name}
-
-    @staticmethod
-    def _filter_markets(markets: list, asset_filter: str | None) -> list:
-        active = []
-        for m in markets:
-            days = days_to_expiry(m.get("expiry"))
-            if 0 <= days < MIN_DAYS_TO_EXPIRY:
-                continue
-            if asset_filter:
-                name = m.get("name", "") or m.get("symbol", "") or ""
-                if not matches_asset_family(name, asset_filter):
-                    continue
-            active.append(m)
-        return active
 
     # -- Loop analysis --
 
@@ -181,11 +162,9 @@ class LoopScoutAgent:
             implied = float(market.get("details_impliedApy") or 0)
             underlying = float(market.get("details_underlyingApy") or 0)
             tvl = float(market.get("details_totalTvl") or 0)
-            liq = float(market.get("details_liquidity") or 0)
+            mkt_liquidity = float(market.get("details_liquidity") or 0)
             days = days_to_expiry(market.get("expiry"))
-            family = detect_asset_family(m_name)
             spread = implied - underlying
-            default_ltv = DEFAULT_LTV.get(family, DEFAULT_LTV_FALLBACK)
 
             # ── Morpho loops ───────────────────────────────────────────────
             for mkt in morpho:
@@ -198,16 +177,13 @@ class LoopScoutAgent:
                 morpho_liq = float(mkt.get("liquidity_usd", 0))
                 if morpho_liq < MIN_BORROW_LIQUIDITY_USD:
                     continue
-                ltv = float(mkt.get("lltv", 0)) or default_ltv
+                ltv = float(mkt.get("lltv", 0)) or DEFAULT_LTV_FALLBACK
                 borrow = float(mkt.get("borrow_apy", 0))
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow
                 theo_yield = implied + max(net, 0) * (leverage - 1)
-                sc = score_candidate(implied, spread, tvl, liq, days, 1, 
-                                     borrow_cost=borrow, pt_discount=market.get("details_ptDiscount", 0), 
-                                     leverage=leverage)
                 candidates.append(_build_candidate(
-                    market, theo_yield, borrow, ltv, leverage, days, family, spread, sc,
+                    market, theo_yield, borrow, ltv, leverage, days, spread,
                     "morpho", f"Morpho {col}", borrow_liquidity=morpho_liq,
                     morpho_unique_key=mkt.get("unique_key", ""),
                     morpho_collateral_symbol=mkt.get("collateral_symbol", ""),
@@ -221,16 +197,16 @@ class LoopScoutAgent:
                     continue
                 if not pt_data.get("can_be_collateral", False):
                     continue
-                ltv = float(pt_data.get("ltv", 0)) or default_ltv
+                ltv = float(pt_data.get("ltv", 0)) or DEFAULT_LTV_FALLBACK
                 if ltv <= 0:
                     continue
 
                 # Best stablecoin to borrow with sufficient liquidity
                 best_stable = None
                 for sym, sdata in stable_data.items():
-                    liq = sdata.get("available_liquidity_usd", 0)
-                    if liq >= MIN_BORROW_LIQUIDITY_USD and sdata.get("borrowing_state") == "BORROWING":
-                        if best_stable is None or liq > best_stable["available_liquidity_usd"]:
+                    stable_liq = sdata.get("available_liquidity_usd", 0)
+                    if stable_liq >= MIN_BORROW_LIQUIDITY_USD and sdata.get("borrowing_state") == "BORROWING":
+                        if best_stable is None or stable_liq > best_stable["available_liquidity_usd"]:
                             best_stable = sdata
 
                 if best_stable is None:
@@ -240,17 +216,12 @@ class LoopScoutAgent:
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow
                 theo_yield = implied + max(net, 0) * (leverage - 1)
-                sc = score_candidate(implied, spread, tvl, liq, days, 1, 
-                                     borrow_cost=borrow, pt_discount=market.get("details_ptDiscount", 0), 
-                                     leverage=leverage)
                 candidates.append(_build_candidate(
-                    market, theo_yield, borrow, ltv, leverage, days, family, spread, sc,
+                    market, theo_yield, borrow, ltv, leverage, days, spread,
                     "aavev3", f"AAVE {pt_sym} / {best_stable['symbol']}", 
                     borrow_liquidity=best_stable.get("available_liquidity_usd", 0)))
 
             # ── Euler borrowable vault loops (PT as collateral) ─────────────
-            # euler_borrowable contains vaults that accept PT as collateral
-            # These have real borrow rates unlike PT vaults which are supply-only
             for bv in euler_borrowable:
                 if bv.get("chain_id", 1) != m_chain:
                     continue
@@ -258,7 +229,7 @@ class LoopScoutAgent:
                 if borrow_pct <= 0:
                     continue
                 
-                # Check if this vault accepts a PT matching our market (by ticker + expiry)
+                # Check if this vault accepts a PT matching our market
                 matched_pt = None
                 matched_pt_evault = ""
                 market_expiry = market.get("expiry")
@@ -272,29 +243,24 @@ class LoopScoutAgent:
                 if not matched_pt:
                     continue
                 
-                # Estimate liquidity (cash in vault as USD approximation)
-                euler_liq_usd = float(bv.get("cash", 0))
-                if euler_liq_usd < MIN_BORROW_LIQUIDITY_USD:
+                # Use cash as liquidity proxy (in token units, not USD)
+                euler_liq = float(bv.get("cash", 0))
+                if euler_liq < MIN_BORROW_LIQUIDITY_USD:
                     continue
                 
-                ltv = default_ltv
+                ltv = DEFAULT_LTV_FALLBACK
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow_pct
                 theo_yield = implied + max(net, 0) * (leverage - 1)
-                sc = score_candidate(implied, spread, tvl, liq, days, 1, 
-                                     borrow_cost=borrow_pct, pt_discount=market.get("details_ptDiscount", 0), 
-                                     leverage=leverage)
-                # Show the borrow vault name (stable vault) with borrow rate
                 borrow_vault = bv.get("symbol", "?")
                 vault_name = f"Euler {borrow_vault} ({borrow_pct*100:.2f}%) ⟶ {matched_pt}"
                 vault_symbol = borrow_vault
-                # Get evault addresses for deep link
                 euler_vault_address = bv.get("evault", "")
                 euler_collateral_address = matched_pt_evault or ""
                 candidates.append(_build_candidate(
-                    market, theo_yield, borrow_pct, ltv, leverage, days, family, spread, sc,
-                    "euler", vault_name, borrow_liquidity=euler_liq_usd,
-                    borrow_liquidity_tokens=euler_liq_usd, borrow_token_symbol=vault_symbol,
+                    market, theo_yield, borrow_pct, ltv, leverage, days, spread,
+                    "euler", vault_name, borrow_liquidity=euler_liq,
+                    borrow_liquidity_tokens=euler_liq, borrow_token_symbol=vault_symbol,
                     euler_vault_address=euler_vault_address, euler_collateral_address=euler_collateral_address))
 
         candidates.sort(key=lambda c: c["theoretical_max_yield"], reverse=True)
@@ -309,12 +275,11 @@ class LoopScoutAgent:
         top = candidates[:count]
 
         if not top:
-            return {"output": no_results_message(state.get("chain_name"), state.get("asset_filter"))}
+            return {"output": no_results_message(state.get("chain_name"))}
 
         chain = (state.get("chain_name") or "toutes chaînes").capitalize()
-        asset = state.get("asset_filter") or "tous actifs"
 
-        parts = [f"🔄 *Loop Scout — {chain} / {asset}*\n_{len(candidates)} candidat(s), top {len(top)} :_\n"]
+        parts = [f"🔄 *Loop Scout — {chain}*\n_{len(candidates)} candidat(s), top {len(top)} :_\n"]
         for i, c in enumerate(top, 1):
             parts.append(format_candidate(i, c))
         parts.append("\n⚠️ *Disclaimer* — Rendements théoriques estimés. Vérifiez LTV/borrow réels. Bot read-only. DYOR.")
@@ -323,7 +288,7 @@ class LoopScoutAgent:
 
     # -- Public API --
 
-    async def run(self, count: int = 5, asset: str | None = None, chain: str | None = None) -> str:
+    async def run(self, count: int = 5, chain: str | None = None) -> str:
         """Run the loop scout with explicit parameters."""
         chain_id = CHAINS.get(chain) if chain else None
         chain_name = chain
@@ -331,7 +296,6 @@ class LoopScoutAgent:
         state: LoopScoutState = {
             "chain_filter": chain_id,
             "chain_name": chain_name,
-            "asset_filter": asset,
             "count": count,
             "markets": [],
             "loop_candidates": [],
@@ -342,9 +306,8 @@ class LoopScoutAgent:
 
         try:
             save_scan(
-                query=f"count={count} asset={asset} chain={chain}",
+                query=f"count={count} chain={chain}",
                 chain=chain_name,
-                asset_filter=asset,
                 candidates=candidates,
             )
             save_yield_history(candidates)
