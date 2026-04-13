@@ -8,6 +8,8 @@ from typing import Any
 
 import httpx
 
+from utils.parsing import is_pt_not_expired
+
 logger = logging.getLogger(__name__)
 
 _HEADERS = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
@@ -101,11 +103,15 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, subgraph: str, 
         if asset: vault_by_asset[asset] = v
         if sym: vault_by_symbol_lower[sym] = v
 
-    # First pass: collect all PT vaults
+    # First pass: collect all non-expired PT vaults
     chain_pt_vaults = []
     for v in vaults:
         symbol = v.get("symbol", "")
         if "PT" not in symbol.upper():
+            continue
+        # Filter out expired PT tokens
+        if not is_pt_not_expired(symbol):
+            logger.debug("Skipping expired PT vault: %s", symbol)
             continue
             
         state = v.get("state") or {}
@@ -193,17 +199,19 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, subgraph: str, 
                 })
                 continue
             
-            # Try by looking up in all vaults
+            # Try by looking up in all vaults (filter out expired PT tokens)
             for lookup_map in [vault_by_id, vault_by_evault, vault_by_dtoken, vault_by_asset]:
                 potential = lookup_map.get(col_lower)
                 if potential and "PT" in potential.get("symbol", "").upper():
-                    pt_collaterals.append({
-                        "symbol": potential.get("symbol", ""),
-                        "evault": potential.get("evault", ""),
-                        "dToken": potential.get("dToken", ""),
-                        "asset": potential.get("asset", ""),
-                        "match_type": "lookup",
-                    })
+                    pt_sym = potential.get("symbol", "")
+                    if is_pt_not_expired(pt_sym):
+                        pt_collaterals.append({
+                            "symbol": pt_sym,
+                            "evault": potential.get("evault", ""),
+                            "dToken": potential.get("dToken", ""),
+                            "asset": potential.get("asset", ""),
+                            "match_type": "lookup",
+                        })
                     break
 
         # Only include if it has PT collateral
