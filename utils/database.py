@@ -103,30 +103,39 @@ def save_scan(query, chain, candidates):
     sid = cur.lastrowid
 
     for c in candidates:
-        values = (
-            sid, c.get("name",""), c.get("address",""), c.get("chain_id"),
-            c.get("implied_apy",0), c.get("underlying_apy",0), c.get("spread",0),
-            c.get("borrow_cost_estimate",0), c.get("theoretical_max_yield",0),
-            c.get("estimated_max_leverage",1), c.get("tvl",0),
-            c.get("liquidity",0), c.get("days_to_expiry",0),
-            c.get("loop_paths", ""),
-            c.get("vault_name",""), c.get("vault_id",""),
-            c.get("morpho_unique_key",""), c.get("morpho_collateral_symbol",""), c.get("morpho_loan_symbol",""),
-            c.get("euler_vault_address",""), c.get("euler_collateral_address",""),
-            c.get("borrow_liquidity_usd",0), c.get("borrow_liquidity_tokens",0), c.get("borrow_token_symbol",""),
-        )
+        # Dict-based approach: columns and values always in sync
+        row = {
+            "scan_id": sid,
+            "name": c.get("name",""),
+            "address": c.get("address",""),
+            "chain_id": c.get("chain_id"),
+            "implied_apy": c.get("implied_apy",0),
+            "underlying_apy": c.get("underlying_apy",0),
+            "spread": c.get("spread",0),
+            "borrow_cost": c.get("borrow_cost_estimate",0),
+            "theoretical_yield": c.get("theoretical_max_yield",0),
+            "estimated_leverage": c.get("estimated_max_leverage",1),
+            "tvl": c.get("tvl",0),
+            "liquidity": c.get("liquidity",0),
+            "days_to_expiry": c.get("days_to_expiry",0),
+            "loop_paths": c.get("loop_paths",""),
+            "vault_name": c.get("vault_name",""),
+            "vault_id": c.get("vault_id",""),
+            "morpho_unique_key": c.get("morpho_unique_key",""),
+            "morpho_collateral_symbol": c.get("morpho_collateral_symbol",""),
+            "morpho_loan_symbol": c.get("morpho_loan_symbol",""),
+            "euler_vault_address": c.get("euler_vault_address",""),
+            "euler_collateral_address": c.get("euler_collateral_address",""),
+            "borrow_liquidity_usd": c.get("borrow_liquidity_usd",0),
+            "borrow_liquidity_tokens": c.get("borrow_liquidity_tokens",0),
+            "borrow_token_symbol": c.get("borrow_token_symbol",""),
+        }
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(["?"] * len(row))
         try:
             conn.execute(
-                """INSERT INTO candidates
-                   (scan_id, name, address, chain_id, implied_apy, underlying_apy, spread,
-                    borrow_cost, theoretical_yield, estimated_leverage, tvl,
-                    liquidity, days_to_expiry, loop_paths,
-                    vault_name, vault_id,
-                    morpho_unique_key, morpho_collateral_symbol, morpho_loan_symbol,
-                    euler_vault_address, euler_collateral_address,
-                    borrow_liquidity_usd, borrow_liquidity_tokens, borrow_token_symbol)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                values)
+                f"INSERT INTO candidates ({cols}) VALUES ({placeholders})",
+                tuple(row.values()))
         except Exception as e:
             log.error("DB insert failed: %s", e)
             raise
