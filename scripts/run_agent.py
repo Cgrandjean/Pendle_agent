@@ -20,25 +20,22 @@ from agents.loop_scout_agent import LoopScoutAgent
 async def main():
     args = sys.argv[1:]
     count = 100
-    asset = "stable"
     chain = None
 
-    # Simple parsing: /loop [count] [asset] [chain]
+    # Simple parsing: /loop [count] [chain]
     if args:
         count = int(args[0]) if args[0].isdigit() else count
         if len(args) > 1:
-            asset = args[1]
-        if len(args) > 2:
-            chain = args[2]
+            chain = args[1]
 
-    query_desc = f"count={count} asset={asset} chain={chain}"
+    query_desc = f"count={count} chain={chain}"
     print("=" * 80)
     print(f"Running LoopScoutAgent with query: '{query_desc}'")
     print("=" * 80)
 
     agent = LoopScoutAgent()
     t0 = time.time()
-    output = await agent.run(count=count, asset=asset, chain=chain)
+    output = await agent.run(count=count, chain=chain)
     elapsed = time.time() - t0
 
     print("\n" + "=" * 80)

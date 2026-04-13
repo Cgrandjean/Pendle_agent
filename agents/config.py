@@ -3,7 +3,7 @@
 import os
 from dotenv import load_dotenv
 
-from const import CHAINS, SPIKE_WINDOW_DEFAULT, SPIKE_MULTIPLIER_DEFAULT, SPIKE_MIN_YIELD_DEFAULT
+from const import CHAINS, MIN_TVL, MIN_DAYS_TO_EXPIRY, MIN_BORROW_LIQUIDITY_USD
 
 load_dotenv()
 

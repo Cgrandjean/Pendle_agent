@@ -71,6 +71,8 @@ def _now():
 def _ensure_extra_columns(conn):
     """Ensure all columns exist in the candidates table (for migrations)."""
     extra_cols = [
+        ("liquidity", "REAL"),
+        ("days_to_expiry", "REAL"),
         ("morpho_unique_key", "TEXT"),
         ("morpho_collateral_symbol", "TEXT"),
         ("morpho_loan_symbol", "TEXT"),
