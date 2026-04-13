@@ -93,6 +93,7 @@ def _format_spike_entry(index: int, spike: dict) -> str:
     current_yield = spike.get("current_yield", 0)
     sma_yield = spike.get("sma_yield", 0)
     spike_ratio = spike.get("spike_ratio", 0)
+    recent_values = spike.get("recent_values", [])
 
     entry = f"*{index}. {spike.get('name', '?')}*\n"
 
@@ -104,6 +105,12 @@ def _format_spike_entry(index: int, spike: dict) -> str:
         f"   📊 Theo: {fmt_pct(current_yield)} (avg: {fmt_pct(sma_yield)})\n"
         f"   ⚡ ×{spike_ratio:.1f} spike"
     )
+    
+    # Show last 5 historical values if available
+    if recent_values:
+        hist_str = " → ".join(fmt_pct(v) for v in recent_values[:5])
+        entry += f"\n   📉 History: {hist_str}"
+    
     return entry
 
 
@@ -189,7 +196,7 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, c in enumerate(top, 1):
         lines.append(format_candidate(i, c))
 
-    lines.append("\n⚠️ *Disclaimer* — Rendements théoriques estimés. Vérifiez LTV/borrow réels. Bot read-only. DYOR.")
+    lines.append("\n⚠️ *Disclaimer* — Theoretical estimated yields. Verify actual LTV/borrow rates. Bot is read-only. DYOR.")
 
     msg = "\n".join(lines)
     if len(msg) <= MSG_MAX_LENGTH:

@@ -163,6 +163,10 @@ def get_last_scan_candidates(chain=None):
             d['loop_paths'] = json.loads(d.get('loop_paths', '[]'))
         except (json.JSONDecodeError, TypeError):
             d['loop_paths'] = []
+        # Remap DB column names to expected keys (fixes /status output)
+        d["theoretical_max_yield"] = d.get("theoretical_yield", 0)
+        d["estimated_max_leverage"] = d.get("estimated_leverage", 0)
+        d["borrow_cost_estimate"] = d.get("borrow_cost", 0)
         results.append(d)
     return results
 
@@ -369,12 +373,16 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
         if cur < min_yield:
             continue
 
+        # OFFSET 1 to exclude current scan from SMA calculation
         rows = conn.execute(
-            "SELECT theoretical_yield FROM yield_history WHERE address = ? ORDER BY ts DESC LIMIT ?",
+            "SELECT theoretical_yield FROM yield_history WHERE address = ? ORDER BY ts DESC LIMIT ? OFFSET 1",
             (addr, window)).fetchall()
 
         past = [r["theoretical_yield"] for r in rows if r["theoretical_yield"] and r["theoretical_yield"] > 0]
-        if len(past) < 3:
+        
+        # Require at least window//3 or 5 points (whichever is bigger) to avoid early false spikes
+        min_points = max(window // 3, 5)
+        if len(past) < min_points:
             continue
 
         sma = sum(past) / len(past)
@@ -392,6 +400,7 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
                 "vault_name": c.get("vault_name", ""),
                 "vault_id": c.get("vault_id", ""),
                 "leverage": c.get("estimated_max_leverage", 0),
+                "recent_values": past[:5],  # Last 5 historical values before spike
             })
 
     spikes.sort(key=lambda s: s["spike_ratio"], reverse=True)

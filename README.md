@@ -1,18 +1,8 @@
----
-title: Pendle Loop Scout
-emoji: 🔄
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Pendle Loop Scout
 
 > **Telegram bot that detects the best loop opportunities on Pendle Finance**
 
-An autonomous agent that continuously scans Pendle PT (Principal Token) markets across **10 chains** (Ethereum, Arbitrum, Base, Optimism, BNB, Sonic, Mantle, Plasma, Berachain, + testnet), cross-references data with lending protocols (AAVE V3, Morpho Blue, Euler V2), and identifies the best **loop** opportunities — a DeFi strategy that involves buying discounted PTs, depositing them as collateral, borrowing the underlying asset, and repurchasing PT in a cycle to amplify yield.
+An autonomous agent that continuously scans Pendle PT (Principal Token) markets across **10 chains** (Ethereum, Arbitrum, Base, Optimism, BNB, Sonic, Mantle, Plasma, Berachain), cross-references data with lending protocols (AAVE V3, Morpho Blue, Euler V2), and identifies the best **loop** opportunities — a DeFi strategy that involves buying discounted PTs, depositing them as collateral, borrowing the underlying asset, and repurchasing PT in a cycle to amplify yield.
 
 ---
 
@@ -37,24 +27,16 @@ This bot automates the search for these opportunities and alerts you when an int
 ### Loop search
 
 ```
-/loop [count] [asset] [chain]
+/loop [count] [chain]
 ```
 
 Scans Pendle markets and returns the best loop opportunities, ranked by theoretical yield.
 
 **Examples:**
-- `/loop` — top 5 all assets, all chains
-- `/loop stable` — stablecoins only (USDC, USDT, USDS...)
-- `/loop eth arbitrum` — ETH markets on Arbitrum
-- `/loop top 10 btc` — top 10 BTC markets
-
-**What the bot does:**
-1. Fetches filtered Pendle markets
-2. Enriches with external protocols (AAVE, Morpho, Euler)
-3. Calculates real borrow rates for each money market
-4. Estimates max leverage based on LTV
-5. Calculates max theoretical yield
-6. Scores and ranks opportunities
+- `/loop` — top 5, all chains
+- `/loop 10` — top 10 results
+- `/loop eth` — ETH markets on Ethereum
+- `/loop arb` — ETH markets on Arbitrum
 
 ### Instant report
 
@@ -62,21 +44,22 @@ Scans Pendle markets and returns the best loop opportunities, ranked by theoreti
 /status
 ```
 
-Runs a full scan and displays the report. This is the **only way** to get a full report — the automatic background scan is silent and only sends alerts.
+Shows the cached results from the last automatic scan. Useful for quick checks without triggering a new scan.
+
+**Note:** `/loop` also triggers a fresh scan and displays results immediately if you want updated data.
 
 ### Yield alerts
 
 ```
-/alert [asset] [chain] [yield%]
+/alert [chain] [yield%]
 ```
 
 Creates an alert that triggers when a market exceeds the specified theoretical yield. Checked at every automatic scan.
 
 **Examples:**
-- `/alert stable 15%` — alert if a stablecoin exceeds 15% theo yield
-- `/alert eth 20%` — alert if an ETH market exceeds 20%
-- `/alert 25%` — all assets > 25%
-- `/alert stable arbitrum 10%` — stables on Arbitrum > 10%
+- `/alert 15%` — alert if any market exceeds 15% theo yield
+- `/alert eth 20%` — ETH markets on Ethereum exceed 20%
+- `/alert arb 10%` — ETH markets on Arbitrum exceed 10%
 
 **Management:**
 - `/alerts` — view active alerts
@@ -101,6 +84,20 @@ Detects **sudden yield increases** by comparing current yield to the average of 
 - A borrow rate that crashed on a money market
 - A temporary opportunity before the market rebalances
 
+### Database management
+
+```
+/export
+```
+
+Displays database summary: total scans, active alerts, last scan info, and top candidates.
+
+```
+/resetdb [confirm]
+```
+
+Resets the database (requires `confirm` argument). Use after updates to ensure schema is current.
+
 ### Help
 
 ```
@@ -123,30 +120,30 @@ The bot uses a LangGraph graph with nodes that run in parallel:
                     └──────┬──────┘
            ┌───────────────┼───────────────┐
            ▼               ▼               ▼
-    ┌──────────┐   ┌──────────┐   ┌──────────┐
-    │  AAVE    │   │  Morpho  │   │  Euler   │
-    │  skim    │   │  skim    │   │  skim    │
-    └────┬─────┘   └────┬─────┘   └────┬─────┘
-         │               │               │
-         ▼               ▼               ▼
-    ┌─────────────────────────────────────────┐
-    │         collect_markets                  │
-    │  (fetches Pendle PT markets)             │
-    └─────────────────┬───────────────────────┘
-                      ▼
-    ┌─────────────────────────────────────────┐
-    │         analyze_loops                   │
-    │  - Calculates real borrow rates         │
-    │  - Estimates max leverage from LTV      │
-    │  - Calculates theoretical yield         │
-    │  - Scores each opportunity              │
-    └─────────────────┬───────────────────────┘
-                      ▼
-    ┌─────────────────────────────────────────┐
-    │         synthesize                      │
-    │  - Formats result for Telegram          │
-    │  - Top N candidates with details        │
-    └─────────────────────────────────────────┘
+     ┌──────────┐   ┌──────────┐   ┌──────────┐
+     │  AAVE    │   │  Morpho  │   │  Euler   │
+     │  skim    │   │  skim    │   │  skim    │
+     └────┬─────┘   └────┬─────┘   └────┬─────┘
+          │               │               │
+          ▼               ▼               ▼
+     ┌─────────────────────────────────────────┐
+     │         collect_markets                  │
+     │  (fetches Pendle PT markets)             │
+     └─────────────────┬───────────────────────┘
+                       ▼
+     ┌─────────────────────────────────────────┐
+     │         analyze_loops                   │
+     │  - Calculates real borrow rates         │
+     │  - Estimates max leverage from LTV      │
+     │  - Calculates theoretical yield         │
+     │  - Scores each opportunity              │
+     └─────────────────┬───────────────────────┘
+                       ▼
+     ┌─────────────────────────────────────────┐
+     │         synthesize                      │
+     │  - Formats result for Telegram          │
+     │  - Top N candidates with details        │
+     └─────────────────────────────────────────┘
 ```
 
 ### Silent automatic scan
@@ -175,6 +172,22 @@ The `yield_history` table enables moving average calculation for spike detection
 
 ---
 
+## Supported Chains
+
+| Chain      | ID     | Notes              |
+|------------|--------|---------------------|
+| Ethereum   | 1      | Mainnet            |
+| Arbitrum   | 42161  |                    |
+| Base       | 8453   |                    |
+| BNB        | 56     | BSC                |
+| Optimism   | 10     |                    |
+| Sonic      | 146    |                    |
+| Mantle     | 5000   |                    |
+| Plasma     | 9745   |                    |
+| Berachain  | 80094  |                    |
+
+---
+
 ## Deploy on Hugging Face Spaces (free)
 
 Hugging Face Spaces offers free Docker hosting, perfect for a Telegram bot.
@@ -198,7 +211,6 @@ In the Space **Settings** → **Repository secrets**, add:
 | `SPIKE_WINDOW` | `30` | Scans for average (30 × 10min = 5h) |
 | `SPIKE_MULTIPLIER` | `1.5` | Spike trigger ratio |
 | `SPIKE_MIN_YIELD` | `0.05` | Minimum yield for spikes (5%) |
-| `DEFAULT_REPORT_QUERY` | `top 10 stable loops` | Default query for /status |
 
 ### Step 3: Push the code
 
@@ -231,10 +243,6 @@ git push
 | `TELEGRAM_BOT_TOKEN` | *(required)* | Telegram bot token |
 | `ALLOWED_CHAT_IDS` | *(empty)* | Authorized chat IDs (comma-separated) |
 | `SCAN_INTERVAL_MINUTES` | `10` | Silent scan frequency |
-| `DEFAULT_REPORT_QUERY` | `top 5 stable loops` | Default query for /status |
-| `SPIKE_WINDOW` | `30` | Number of scans for moving average |
-| `SPIKE_MULTIPLIER` | `1.5` | Spike trigger ratio |
-| `SPIKE_MIN_YIELD` | `0.05` | Minimum yield for spikes |
 | `DB_PATH` | `data/loop_scout.db` | SQLite database path |
 
 ---
@@ -254,7 +262,7 @@ Each displayed opportunity contains:
 | **Days to expiry** | Days remaining until PT maturity |
 | **Borrow cost** | Real borrow rate on the cheapest money market |
 | **Yield theo** | Max estimated yield with leverage |
-| **Score** | Composite /100 (spread, TVL, expiry, money market count, contango) |
+| **Score** | Composite /100 (spread, TVL, expiry, money market count) |
 
 ---
 
@@ -270,9 +278,14 @@ cp .env.example .env
 
 # Run the bot
 python -m telegram_bot.bot
+
+# Or run the agent directly (CLI)
+python scripts/run_agent.py [count] [chain]
 ```
 
-### Project structure
+---
+
+## Project structure
 
 ```
 Pendle_agent/
@@ -282,11 +295,10 @@ Pendle_agent/
 │
 ├── utils/
 │   ├── fetch_pendle.py       # Fetch Pendle PT markets (10 chains)
-│   ├── fetch_aave.py         # AAVE V3 borrow rates (8 chains)
-│   ├── fetch_morpho.py       # Morpho Blue PT markets (all Pendle chains)
+│   ├── fetch_aave.py         # AAVE V3 borrow rates
+│   ├── fetch_morpho.py       # Morpho Blue PT markets
 │   ├── fetch_euler.py        # Euler V2 PT and stable vaults
-│   ├── scoring.py            # Candidate scoring algorithm
-│   ├── formatting.py         # Telegram message formatting
+│   ├── formatting.py        # Telegram message formatting
 │   ├── parsing.py            # PT symbol parsing and asset detection
 │   └── database.py           # SQLite persistence (scans, alerts, yield history)
 │
@@ -299,10 +311,14 @@ Pendle_agent/
 │
 ├── scripts/
 │   ├── hf_runner.py          # Hugging Face Spaces runner
-│   └── run_agent.py          # Local runner
+│   ├── run_agent.py          # Local CLI runner
+│   ├── explore_db.py         # Database exploration utility
+│   ├── reset_db.py           # Database reset utility
+│   └── test_alerts.py        # Alert testing utility
+│
+├── const.py                  # All constants (chains, defaults, help text)
 │
 ├── Dockerfile                # Docker image for HF Spaces
-├── .gitignore
 ├── pyproject.toml
 └── README.md
 ```

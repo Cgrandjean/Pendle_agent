@@ -277,12 +277,12 @@ class LoopScoutAgent:
         if not top:
             return {"output": no_results_message(state.get("chain_name"))}
 
-        chain = (state.get("chain_name") or "toutes chaînes").capitalize()
+        chain = (state.get("chain_name") or "all chains").capitalize()
 
-        parts = [f"🔄 *Loop Scout — {chain}*\n_{len(candidates)} candidat(s), top {len(top)} :_\n"]
+        parts = [f"🔄 *Loop Scout — {chain}*\n_{len(candidates)} candidate(s), top {len(top)}:_\n"]
         for i, c in enumerate(top, 1):
             parts.append(format_candidate(i, c))
-        parts.append("\n⚠️ *Disclaimer* — Rendements théoriques estimés. Vérifiez LTV/borrow réels. Bot read-only. DYOR.")
+        parts.append("\n⚠️ *Disclaimer* — Theoretical estimated yields. Verify actual LTV/borrow rates. Bot is read-only. DYOR.")
 
         return {"output": "\n".join(parts)}
 
@@ -314,4 +314,4 @@ class LoopScoutAgent:
         except Exception as e:
             log.warning("DB save failed: %s", e)
 
-        return result.get("output", "Erreur interne.")
+        return result.get("output", "Internal error.")
