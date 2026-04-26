@@ -1,6 +1,14 @@
 """State schema for the Loop Scout agent."""
 
+from dataclasses import dataclass
 from typing import TypedDict
+
+
+@dataclass
+class PTToken:
+    """Simple PT token: underlying ticker + exact expiry."""
+    underlying: str      # e.g. "susde", "usdg"
+    expiry_iso: str       # ISO date "2026-05-07"
 
 
 class LoopScoutState(TypedDict, total=False):

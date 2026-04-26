@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from utils.parsing import is_pt_not_expired
+from utils.parsing import is_pt_not_expired, parse_pt
 
 logger = logging.getLogger(__name__)
 
@@ -166,36 +166,45 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, subgraph: str, 
             # Try evault match first (most common)
             pt_vault = pt_by_evault.get(col_lower)
             if pt_vault:
+                pt = parse_pt(pt_vault["symbol"])
                 pt_collaterals.append({
                     "symbol": pt_vault["symbol"],
                     "evault": pt_vault["evault"],
                     "dToken": pt_vault["dToken"],
                     "asset": pt_vault["asset"],
                     "match_type": "evault",
+                    "pt_underlying": pt.underlying if pt else "",
+                    "pt_expiry": pt.expiry_iso if pt else "",
                 })
                 continue
             
             # Try dToken match
             pt_vault = pt_by_dtoken.get(col_lower)
             if pt_vault:
+                pt = parse_pt(pt_vault["symbol"])
                 pt_collaterals.append({
                     "symbol": pt_vault["symbol"],
                     "evault": pt_vault["evault"],
                     "dToken": pt_vault["dToken"],
                     "asset": pt_vault["asset"],
                     "match_type": "dToken",
+                    "pt_underlying": pt.underlying if pt else "",
+                    "pt_expiry": pt.expiry_iso if pt else "",
                 })
                 continue
             
             # Try asset match
             pt_vault = pt_by_asset.get(col_lower)
             if pt_vault:
+                pt = parse_pt(pt_vault["symbol"])
                 pt_collaterals.append({
                     "symbol": pt_vault["symbol"],
                     "evault": pt_vault["evault"],
                     "dToken": pt_vault["dToken"],
                     "asset": pt_vault["asset"],
                     "match_type": "asset",
+                    "pt_underlying": pt.underlying if pt else "",
+                    "pt_expiry": pt.expiry_iso if pt else "",
                 })
                 continue
             
@@ -205,12 +214,15 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, subgraph: str, 
                 if potential and "PT" in potential.get("symbol", "").upper():
                     pt_sym = potential.get("symbol", "")
                     if is_pt_not_expired(pt_sym):
+                        pt = parse_pt(pt_sym)
                         pt_collaterals.append({
                             "symbol": pt_sym,
                             "evault": potential.get("evault", ""),
                             "dToken": potential.get("dToken", ""),
                             "asset": potential.get("asset", ""),
                             "match_type": "lookup",
+                            "pt_underlying": pt.underlying if pt else "",
+                            "pt_expiry": pt.expiry_iso if pt else "",
                         })
                     break
 

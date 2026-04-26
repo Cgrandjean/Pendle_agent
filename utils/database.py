@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
+from collections import defaultdict
 
 from agents.config import DB_PATH
 
@@ -31,9 +32,11 @@ def _db():
                 theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL,
                 liquidity REAL, days_to_expiry REAL,
                 loop_paths TEXT, vault_name TEXT, vault_id TEXT,
+                vault_key TEXT,
                 morpho_unique_key TEXT, morpho_collateral_symbol TEXT, morpho_loan_symbol TEXT,
                 euler_vault_address TEXT, euler_collateral_address TEXT,
                 borrow_liquidity_usd REAL, borrow_liquidity_tokens REAL, borrow_token_symbol TEXT,
+                pt_underlying TEXT, pt_expiry TEXT,
                 FOREIGN KEY (scan_id) REFERENCES scans(id)
             );
             CREATE TABLE IF NOT EXISTS alerts (
@@ -44,19 +47,27 @@ def _db():
             );
             CREATE TABLE IF NOT EXISTS yield_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
-                name TEXT, implied_apy REAL,
-                theoretical_yield REAL, borrow_cost REAL
+                ts TEXT NOT NULL,
+                pendle_address TEXT NOT NULL,
+                chain_id INTEGER,
+                pendle_name TEXT,
+                pt_underlying TEXT,
+                pt_expiry TEXT,
+                vault_id TEXT NOT NULL,
+                vault_key TEXT NOT NULL,
+                vault_name TEXT,
+                implied_apy REAL,
+                theoretical_yield REAL,
+                borrow_cost REAL
             );
             CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
             CREATE INDEX IF NOT EXISTS idx_alerts_chat ON alerts(chat_id);
             CREATE INDEX IF NOT EXISTS idx_scans_ts ON scans(ts);
+            CREATE INDEX IF NOT EXISTS idx_yh_combo ON yield_history(pendle_address, vault_id, vault_key, ts);
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_yh_addr ON yield_history(address);
-            CREATE INDEX IF NOT EXISTS idx_yh_ts ON yield_history(ts);
         """)
         _conn.commit()
     return _conn
@@ -71,16 +82,9 @@ def _now():
 def _ensure_extra_columns(conn):
     """Ensure all columns exist in the candidates table (for migrations)."""
     extra_cols = [
-        ("liquidity", "REAL"),
-        ("days_to_expiry", "REAL"),
-        ("morpho_unique_key", "TEXT"),
-        ("morpho_collateral_symbol", "TEXT"),
-        ("morpho_loan_symbol", "TEXT"),
-        ("euler_vault_address", "TEXT"),
-        ("euler_collateral_address", "TEXT"),
-        ("borrow_liquidity_usd", "REAL"),
-        ("borrow_liquidity_tokens", "REAL"),
-        ("borrow_token_symbol", "TEXT"),
+        ("vault_key", "TEXT"),
+        ("pt_underlying", "TEXT"),
+        ("pt_expiry", "TEXT"),
     ]
     for col, col_type in extra_cols:
         try:
@@ -96,39 +100,41 @@ def _ensure_extra_columns(conn):
 def save_scan(query, chain, candidates):
     conn = _db()
     _ensure_extra_columns(conn)
-    
+
     cur = conn.execute(
         "INSERT INTO scans (ts, query, chain, total_candidates) VALUES (?,?,?,?)",
         (_now(), query, chain, len(candidates)))
     sid = cur.lastrowid
 
     for c in candidates:
-        # Dict-based approach: columns and values always in sync
         row = {
             "scan_id": sid,
-            "name": c.get("name",""),
-            "address": c.get("address",""),
+            "name": c.get("name", ""),
+            "address": c.get("address", ""),
             "chain_id": c.get("chain_id"),
-            "implied_apy": c.get("implied_apy",0),
-            "underlying_apy": c.get("underlying_apy",0),
-            "spread": c.get("spread",0),
-            "borrow_cost": c.get("borrow_cost_estimate",0),
-            "theoretical_yield": c.get("theoretical_max_yield",0),
-            "estimated_leverage": c.get("estimated_max_leverage",1),
-            "tvl": c.get("tvl",0),
-            "liquidity": c.get("liquidity",0),
-            "days_to_expiry": c.get("days_to_expiry",0),
-            "loop_paths": c.get("loop_paths",""),
-            "vault_name": c.get("vault_name",""),
-            "vault_id": c.get("vault_id",""),
-            "morpho_unique_key": c.get("morpho_unique_key",""),
-            "morpho_collateral_symbol": c.get("morpho_collateral_symbol",""),
-            "morpho_loan_symbol": c.get("morpho_loan_symbol",""),
-            "euler_vault_address": c.get("euler_vault_address",""),
-            "euler_collateral_address": c.get("euler_collateral_address",""),
-            "borrow_liquidity_usd": c.get("borrow_liquidity_usd",0),
-            "borrow_liquidity_tokens": c.get("borrow_liquidity_tokens",0),
-            "borrow_token_symbol": c.get("borrow_token_symbol",""),
+            "implied_apy": c.get("implied_apy", 0),
+            "underlying_apy": c.get("underlying_apy", 0),
+            "spread": c.get("spread", 0),
+            "borrow_cost": c.get("borrow_cost_estimate", 0),
+            "theoretical_yield": c.get("theoretical_max_yield", 0),
+            "estimated_leverage": c.get("estimated_max_leverage", 1),
+            "tvl": c.get("tvl", 0),
+            "liquidity": c.get("liquidity", 0),
+            "days_to_expiry": c.get("days_to_expiry", 0),
+            "loop_paths": c.get("loop_paths", ""),
+            "vault_name": c.get("vault_name", ""),
+            "vault_id": c.get("vault_id", ""),
+            "vault_key": c.get("vault_key", ""),
+            "morpho_unique_key": c.get("morpho_unique_key", ""),
+            "morpho_collateral_symbol": c.get("morpho_collateral_symbol", ""),
+            "morpho_loan_symbol": c.get("morpho_loan_symbol", ""),
+            "euler_vault_address": c.get("euler_vault_address", ""),
+            "euler_collateral_address": c.get("euler_collateral_address", ""),
+            "borrow_liquidity_usd": c.get("borrow_liquidity_usd", 0),
+            "borrow_liquidity_tokens": c.get("borrow_liquidity_tokens", 0),
+            "borrow_token_symbol": c.get("borrow_token_symbol", ""),
+            "pt_underlying": c.get("pt_underlying", ""),
+            "pt_expiry": c.get("pt_expiry", ""),
         }
         cols = ", ".join(row.keys())
         placeholders = ", ".join(["?"] * len(row))
@@ -163,7 +169,6 @@ def get_last_scan_candidates(chain=None):
             d['loop_paths'] = json.loads(d.get('loop_paths', '[]'))
         except (json.JSONDecodeError, TypeError):
             d['loop_paths'] = []
-        # Remap DB column names to expected keys (fixes /status output)
         d["theoretical_max_yield"] = d.get("theoretical_yield", 0)
         d["estimated_max_leverage"] = d.get("estimated_leverage", 0)
         d["borrow_cost_estimate"] = d.get("borrow_cost", 0)
@@ -206,7 +211,6 @@ def delete_alert(alert_id, chat_id):
 
 
 def check_alerts_for_candidates(candidates):
-    """Returns {chat_id: [matching candidates]}."""
     alerts = get_alerts(enabled_only=True)
     results = {}
     for alert in alerts:
@@ -225,16 +229,41 @@ def check_alerts_for_candidates(candidates):
 # -- Yield history & spike detection --
 
 def save_yield_history(candidates):
+    """Save one entry per unique (pendle_address, vault_id, vault_key) combo.
+    
+    If the same combo appears multiple times in a scan, keeps the one with
+    the highest theoretical_yield.
+    """
     conn = _db()
     now = _now()
+
+    # Deduplicate: best candidate per combo within this scan
+    best: dict[tuple, dict] = {}
     for c in candidates:
         addr = c.get("address", "")
         if not addr:
             continue
+        vault_id  = c.get("vault_id", "")
+        vault_key = c.get("vault_key", "")
+        if not vault_id or not vault_key:
+            continue
+
+        key = (addr, vault_id, vault_key)
+        theo = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
+        existing = best.get(key)
+        if existing is None or theo > (existing.get("theoretical_max_yield") or existing.get("theoretical_yield") or 0):
+            best[key] = c
+
+    for (addr, vault_id, vault_key), c in best.items():
         conn.execute(
-            "INSERT INTO yield_history (ts,address,chain_id,name,implied_apy,theoretical_yield,borrow_cost) VALUES (?,?,?,?,?,?,?)",
-            (now, addr, c.get("chain_id"), c.get("name",""),
-             c.get("implied_apy",0),
+            "INSERT INTO yield_history "
+            "(ts, pendle_address, chain_id, pendle_name, pt_underlying, pt_expiry, "
+            "vault_id, vault_key, vault_name, implied_apy, theoretical_yield, borrow_cost) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (now, addr, c.get("chain_id"), c.get("name", ""),
+             c.get("pt_underlying", ""), c.get("pt_expiry", ""),
+             vault_id, vault_key, c.get("vault_name", ""),
+             c.get("implied_apy", 0),
              c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0,
              c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0))
     conn.commit()
@@ -268,9 +297,18 @@ def reset_db():
     """Reset the database by deleting and recreating all tables."""
     global _conn
     if _conn:
-        _conn.close()
+        try:
+            _conn.close()
+        except Exception:
+            pass
         _conn = None
-    # Create a fresh connection and recreate all tables
+    # Delete the DB file so we start clean (avoids stale schema issues)
+    db_path = DB_PATH
+    if os.path.exists(db_path):
+        try:
+            os.remove(db_path)
+        except Exception:
+            pass
     conn = _db()
     conn.executescript("""
         DROP TABLE IF EXISTS candidates;
@@ -290,9 +328,11 @@ def reset_db():
             theoretical_yield REAL, estimated_leverage INTEGER, tvl REAL,
             liquidity REAL, days_to_expiry REAL,
             loop_paths TEXT, vault_name TEXT, vault_id TEXT,
+            vault_key TEXT,
             morpho_unique_key TEXT, morpho_collateral_symbol TEXT, morpho_loan_symbol TEXT,
             euler_vault_address TEXT, euler_collateral_address TEXT,
             borrow_liquidity_usd REAL, borrow_liquidity_tokens REAL, borrow_token_symbol TEXT,
+            pt_underlying TEXT, pt_expiry TEXT,
             FOREIGN KEY (scan_id) REFERENCES scans(id)
         );
         CREATE TABLE IF NOT EXISTS alerts (
@@ -303,19 +343,27 @@ def reset_db():
         );
         CREATE TABLE IF NOT EXISTS yield_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL, address TEXT NOT NULL, chain_id INTEGER,
-            name TEXT, implied_apy REAL,
-            theoretical_yield REAL, borrow_cost REAL
+            ts TEXT NOT NULL,
+            pendle_address TEXT NOT NULL,
+            chain_id INTEGER,
+            pendle_name TEXT,
+            pt_underlying TEXT,
+            pt_expiry TEXT,
+            vault_id TEXT NOT NULL,
+            vault_key TEXT NOT NULL,
+            vault_name TEXT,
+            implied_apy REAL,
+            theoretical_yield REAL,
+            borrow_cost REAL
         );
         CREATE INDEX IF NOT EXISTS idx_cand_scan ON candidates(scan_id);
         CREATE INDEX IF NOT EXISTS idx_alerts_chat ON alerts(chat_id);
         CREATE INDEX IF NOT EXISTS idx_scans_ts ON scans(ts);
+        CREATE INDEX IF NOT EXISTS idx_yh_combo ON yield_history(pendle_address, vault_id, vault_key, ts);
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_yh_addr ON yield_history(address);
-        CREATE INDEX IF NOT EXISTS idx_yh_ts ON yield_history(ts);
     """)
     conn.commit()
     log.info("Database reset - tables recreated")
@@ -323,37 +371,29 @@ def reset_db():
 
 
 def export_db_summary():
-    """Export a summary of the database contents."""
     conn = _db()
     summary = {}
-    
-    # Scan count
     r = conn.execute("SELECT COUNT(*) as cnt FROM scans").fetchone()
     summary["total_scans"] = r["cnt"] if r else 0
-    
-    # Candidate count
     r = conn.execute("SELECT COUNT(*) as cnt FROM candidates").fetchone()
     summary["total_candidates"] = r["cnt"] if r else 0
-    
-    # Alert count
     r = conn.execute("SELECT COUNT(*) as cnt FROM alerts WHERE enabled = 1").fetchone()
     summary["active_alerts"] = r["cnt"] if r else 0
-    
-    # Last scan details
     row = conn.execute("SELECT * FROM scans ORDER BY ts DESC LIMIT 1").fetchone()
     if row:
         summary["last_scan"] = dict(row)
-        # Top 5 candidates from last scan
         candidates = [dict(r) for r in conn.execute(
             "SELECT name, theoretical_yield, vault_name, vault_id FROM candidates WHERE scan_id = ? ORDER BY theoretical_yield DESC LIMIT 5",
             (row["id"],)).fetchall()]
         summary["top_candidates"] = candidates
-    
     return summary
 
 
 def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None):
-    """Compare current yield to SMA. Returns spikes sorted by ratio."""
+    """Compare current yield to SMA per unique (pendle_address, vault_id, vault_key) combo.
+    
+    Returns spikes sorted by ratio.
+    """
     cfg = get_spike_config()
     if window is None:
         window = cfg["window"]
@@ -369,18 +409,24 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
         addr = c.get("address", "")
         if not addr:
             continue
+        vault_id  = c.get("vault_id", "")
+        vault_key = c.get("vault_key", "")
+        if not vault_id or not vault_key:
+            continue
+
         cur = c.get("theoretical_max_yield") or c.get("theoretical_yield") or 0
         if cur < min_yield:
             continue
 
-        # OFFSET 1 to exclude current scan from SMA calculation
+        # OFFSET 1 to exclude current scan from SMA
         rows = conn.execute(
-            "SELECT theoretical_yield FROM yield_history WHERE address = ? ORDER BY ts DESC LIMIT ? OFFSET 1",
-            (addr, window)).fetchall()
+            "SELECT theoretical_yield FROM yield_history "
+            "WHERE pendle_address = ? AND vault_id = ? AND vault_key = ? "
+            "ORDER BY ts DESC LIMIT ? OFFSET 1",
+            (addr, vault_id, vault_key, window)).fetchall()
 
         past = [r["theoretical_yield"] for r in rows if r["theoretical_yield"] and r["theoretical_yield"] > 0]
-        
-        # Require at least window//3 or 5 points (whichever is bigger) to avoid early false spikes
+
         min_points = max(window // 3, 5)
         if len(past) < min_points:
             continue
@@ -392,15 +438,19 @@ def detect_yield_spikes(candidates, window=None, multiplier=None, min_yield=None
         ratio = cur / sma
         if ratio >= multiplier:
             spikes.append({
-                "name": c.get("name", "?"), "address": addr,
-                "chain_id": c.get("chain_id"), 
-                "current_yield": cur, "sma_yield": sma, "spike_ratio": ratio,
+                "name": c.get("name", "?"),
+                "address": addr,
+                "chain_id": c.get("chain_id"),
+                "current_yield": cur,
+                "sma_yield": sma,
+                "spike_ratio": ratio,
                 "implied_apy": c.get("implied_apy", 0),
                 "borrow_cost": c.get("borrow_cost_estimate") or c.get("borrow_cost") or 0,
                 "vault_name": c.get("vault_name", ""),
-                "vault_id": c.get("vault_id", ""),
+                "vault_id": vault_id,
+                "vault_key": vault_key,
                 "leverage": c.get("estimated_max_leverage", 0),
-                "recent_values": past[:5],  # Last 5 historical values before spike
+                "recent_values": past[:5],
             })
 
     spikes.sort(key=lambda s: s["spike_ratio"], reverse=True)

@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from utils.parsing import is_pt_not_expired
+from utils.parsing import is_pt_not_expired, parse_pt
 from utils.fetch_pendle import ALL_CHAINS
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,8 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, min_supply_usd:
             borrow_apy = float(state.get("borrowApy") or 0)
 
             col_symbol = col.get("symbol", "")
-            if supply_usd > min_supply_usd and is_pt_not_expired(col_symbol):
+            pt = parse_pt(col_symbol)
+            if supply_usd > min_supply_usd and pt and is_pt_not_expired(col_symbol):
                 markets.append({
                     "unique_key": m.get("uniqueKey", ""),
                     "collateral_symbol": col.get("symbol", ""),
@@ -71,6 +72,8 @@ async def _fetch_chain(client: httpx.AsyncClient, chain_id: int, min_supply_usd:
                     "liquidity_usd": liquidity_usd,
                     "utilization": float(state.get("utilization") or 0),
                     "chain_id": chain_id,
+                    "pt_underlying": pt.underlying,
+                    "pt_expiry": pt.expiry_iso,
                 })
     except Exception as e:
         logger.error("Morpho chain %d fetch error: %s", chain_id, e)

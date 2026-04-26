@@ -7,9 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from agents.config import MIN_TVL, MIN_DAYS_TO_EXPIRY, CHAINS, MIN_BORROW_LIQUIDITY_USD
 from utils.fetch_pendle import fetch_all_markets as _fetch_all_pendle_markets
 from schemas.agent_state import LoopScoutState
-from utils.parsing import (
-    days_to_expiry, pt_matches_market,
-)
+from utils.parsing import days_to_expiry, extract_ticker
 from utils.formatting import format_candidate, no_results_message
 from utils.fetch_aave import fetch_aave_data
 from utils.fetch_morpho import fetch_morpho_data
@@ -18,29 +16,37 @@ from utils.database import save_scan, save_yield_history
 
 log = logging.getLogger(__name__)
 
-# Default LTV by asset family
 DEFAULT_LTV_FALLBACK = 0.70
 
 
 def _build_candidate(market, theo_yield, borrow, ltv, leverage, days, spread, protocol, vault_name, 
                      borrow_liquidity=0, borrow_liquidity_tokens=0, borrow_token_symbol="",
                      morpho_unique_key="", morpho_collateral_symbol="", morpho_loan_symbol="",
-                     euler_vault_address="", euler_collateral_address="") -> dict:
+                     euler_vault_address="", euler_collateral_address="",
+                     pt_underlying="", pt_expiry="") -> dict:
     """Build a candidate dict for loop opportunities."""
+    # vault_key uniquely identifies a (protocol, specific market) combo for DB history
+    if protocol == "morpho":
+        vault_key = morpho_unique_key or ""
+    elif protocol == "euler":
+        # When euler_vault_address is empty (e.g. borrowed asset not resolved),
+        # add pt_underlying to ensure uniqueness per PT collateral
+        base_key = euler_vault_address or ""
+        vault_key = f"{base_key}:{pt_underlying}" if base_key else pt_underlying
+    else:
+        vault_key = f"{market.get('chainId', 1)}:{borrow_token_symbol}"
+
     return {
-        # Identity
         "address": market.get("address", ""),
         "chain_id": market.get("chainId", 1),
         "name": market.get("name", "") or market.get("symbol", ""),
         "days_to_expiry": round(days, 1),
-        # Pendle market data
         "implied_apy": float(market.get("details_impliedApy") or 0),
         "underlying_apy": float(market.get("details_underlyingApy") or 0),
         "spread": spread,
         "pt_discount": float(market.get("details_ptDiscount") or 0),
         "tvl": float(market.get("details_totalTvl") or 0),
         "liquidity": float(market.get("details_liquidity") or 0),
-        # Loop math
         "theoretical_max_yield": theo_yield,
         "estimated_max_leverage": leverage,
         "estimated_ltv": ltv,
@@ -48,17 +54,19 @@ def _build_candidate(market, theo_yield, borrow, ltv, leverage, days, spread, pr
         "borrow_liquidity_usd": borrow_liquidity,
         "borrow_liquidity_tokens": borrow_liquidity_tokens,
         "borrow_token_symbol": borrow_token_symbol,
-        # Protocol
         "vault_name": vault_name,
         "vault_id": protocol,
-        # Morpho deep link
+        "vault_key": vault_key,
         "morpho_unique_key": morpho_unique_key,
         "morpho_collateral_symbol": morpho_collateral_symbol,
         "morpho_loan_symbol": morpho_loan_symbol,
-        # Euler deep link
         "euler_vault_address": euler_vault_address,
         "euler_collateral_address": euler_collateral_address,
+        "pt_underlying": pt_underlying,
+        "pt_expiry": pt_expiry,
     }
+
+
 
 
 class LoopScoutAgent:
@@ -68,7 +76,6 @@ class LoopScoutAgent:
         self.graph = self._build_graph()
 
     def _build_graph(self):
-        """Build the LangGraph workflow."""
         g = StateGraph(LoopScoutState)
 
         g.add_node("skim_aave", self.skim_aave)
@@ -121,7 +128,6 @@ class LoopScoutAgent:
         all_markets = await _fetch_all_pendle_markets(
             chain_id, None, MIN_TVL, 0.001,
         )
-        # Filter by expiry only
         active = [m for m in all_markets if days_to_expiry(m.get("expiry")) >= MIN_DAYS_TO_EXPIRY]
 
         log.info("Markets: %d active / %d raw", len(active), len(all_markets))
@@ -130,34 +136,19 @@ class LoopScoutAgent:
     # -- Loop analysis --
 
     async def analyze_loops(self, state):
-        """Find loops by matching Pendle markets against PT tokens from lending protocols."""
         markets = state.get("markets", [])
         morpho_data = state.get("morpho_data") or {}
-        aave_data = state.get("aave_data") or {}
+        aave_data  = state.get("aave_data")  or {}
         euler_data = state.get("euler_data") or {}
 
-        morpho = morpho_data.get("pt_markets", [])
-        aave_pt = aave_data.get("pt_tokens", {})
+        morpho_markets = morpho_data.get("pt_markets", [])
+        aave_pt        = aave_data.get("pt_tokens", {})
         euler_borrowable = euler_data.get("borrowable_vaults", [])
-
-        # Debug: log all PT markets from each protocol
-        for mkt in morpho:
-            log.debug("Morpho PT: %s (chain=%d, liq=$%.0f, borrow=%.2f%%)",
-                      mkt.get("collateral_symbol"), mkt.get("chain_id", 0),
-                      float(mkt.get("liquidity_usd", 0)), float(mkt.get("borrow_apy", 0)) * 100)
-        for addr, pt in aave_pt.items():
-            log.debug("AAVE PT: %s (collateral=%s, ltv=%.2f)",
-                      pt.get("symbol"), pt.get("can_be_collateral"), float(pt.get("ltv", 0)))
-        for bv in euler_borrowable:
-            for pt_col in bv.get("pt_collaterals", []):
-                log.debug("Euler borrowable: %s (chain=%d, borrow=%.2f%%) accepts %s",
-                          bv.get("symbol"), bv.get("chain_id", 0),
-                          float(bv.get("borrow_apy_pct", 0)), pt_col.get("symbol"))
 
         candidates = []
 
         for market in markets:
-            m_name = market.get("name", "") or market.get("symbol", "") or ""
+            m_addr = market.get("address", "")
             m_chain = market.get("chainId", 1)
             implied = float(market.get("details_impliedApy") or 0)
             underlying = float(market.get("details_underlyingApy") or 0)
@@ -166,48 +157,63 @@ class LoopScoutAgent:
             days = days_to_expiry(market.get("expiry"))
             spread = implied - underlying
 
-            # ── Morpho loops ───────────────────────────────────────────────
-            for mkt in morpho:
-                if mkt.get("chain_id", 1) != m_chain:
+            # Pendle market identity (API returns underlying name, e.g. "USDG", "wstETH", not "PT-...-DATE")
+            mkt_name = market.get("name", "") or market.get("symbol", "") or ""
+            mkt_ticker = extract_ticker(mkt_name)  # already lowercase
+            mkt_expiry = (market.get("expiry") or "")[:10]
+            if not mkt_ticker or not mkt_expiry:
+                continue
+
+            # ── Morpho loops ────────────────────────────────────────────────
+            for mm in morpho_markets:
+                if mm.get("chain_id", 1) != m_chain:
                     continue
-                col = mkt.get("collateral_symbol", "")
-                if not pt_matches_market(col, m_name):
+
+                if mm.get("pt_underlying", "").lower() != mkt_ticker.lower():
                     continue
-                # Check borrow liquidity
-                morpho_liq = float(mkt.get("liquidity_usd", 0))
-                if morpho_liq < MIN_BORROW_LIQUIDITY_USD:
+                if mm.get("pt_expiry") != mkt_expiry:
                     continue
-                ltv = float(mkt.get("lltv", 0)) or DEFAULT_LTV_FALLBACK
-                borrow = float(mkt.get("borrow_apy", 0))
+
+                morpho_liq = float(mm.get("liquidity_usd", 0))
+                ltv = float(mm.get("lltv", 0)) or DEFAULT_LTV_FALLBACK
+                borrow = float(mm.get("borrow_apy", 0))
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow
                 theo_yield = implied + max(net, 0) * (leverage - 1)
+
                 candidates.append(_build_candidate(
                     market, theo_yield, borrow, ltv, leverage, days, spread,
-                    "morpho", f"Morpho {col}", borrow_liquidity=morpho_liq,
-                    morpho_unique_key=mkt.get("unique_key", ""),
-                    morpho_collateral_symbol=mkt.get("collateral_symbol", ""),
-                    morpho_loan_symbol=mkt.get("loan_symbol", "")))
+                    "morpho", f"Morpho {mm.get('collateral_symbol', '')}",
+                    borrow_liquidity=morpho_liq,
+                    borrow_liquidity_tokens=0,
+                    morpho_unique_key=mm.get("unique_key", ""),
+                    morpho_collateral_symbol=mm.get("collateral_symbol", ""),
+                    morpho_loan_symbol=mm.get("loan_symbol", ""),
+                    pt_underlying=mkt_ticker,
+                    pt_expiry=mkt_expiry,
+                ))
 
-            # ── AAVE PT loops ──────────────────────────────────────────────
+            # ── AAVE PT loops ────────────────────────────────────────────────
             stable_data = aave_data.get("stable_borrow") or {}
             for addr, pt_data in aave_pt.items():
-                pt_sym = pt_data.get("symbol", "")
-                if not pt_matches_market(pt_sym, m_name):
+                if pt_data.get("pt_underlying", "").lower() != mkt_ticker.lower():
                     continue
-                if not pt_data.get("can_be_collateral", False):
+                if pt_data.get("pt_expiry") != mkt_expiry:
                     continue
+                # Use LTV from AAVE if available, otherwise fallback (AAVE returns 0 for PT collaterals)
                 ltv = float(pt_data.get("ltv", 0)) or DEFAULT_LTV_FALLBACK
                 if ltv <= 0:
                     continue
 
-                # Best stablecoin to borrow with sufficient liquidity
+                # Best stablecoin to borrow (any state, even low liquidity — keep for yield tracking)
                 best_stable = None
+                best_stable_liq = 0.0
                 for sym, sdata in stable_data.items():
                     stable_liq = sdata.get("available_liquidity_usd", 0)
-                    if stable_liq >= MIN_BORROW_LIQUIDITY_USD and sdata.get("borrowing_state") == "BORROWING":
-                        if best_stable is None or stable_liq > best_stable["available_liquidity_usd"]:
+                    if sdata.get("borrowing_state") == "BORROWING":
+                        if best_stable is None or stable_liq > best_stable_liq:
                             best_stable = sdata
+                            best_stable_liq = stable_liq
 
                 if best_stable is None:
                     continue
@@ -216,52 +222,58 @@ class LoopScoutAgent:
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow
                 theo_yield = implied + max(net, 0) * (leverage - 1)
+
                 candidates.append(_build_candidate(
                     market, theo_yield, borrow, ltv, leverage, days, spread,
-                    "aavev3", f"AAVE {pt_sym} / {best_stable['symbol']}", 
-                    borrow_liquidity=best_stable.get("available_liquidity_usd", 0)))
+                    "aavev3", f"AAVE {pt_data.get('symbol', '')} / {best_stable['symbol']}",
+                    borrow_liquidity=best_stable.get("available_liquidity_usd", 0),
+                    borrow_liquidity_tokens=0,
+                    borrow_token_symbol=best_stable.get("symbol", ""),
+                    pt_underlying=mkt_ticker,
+                    pt_expiry=mkt_expiry,
+                ))
 
-            # ── Euler borrowable vault loops (PT as collateral) ─────────────
+            # ── Euler borrowable vault loops ────────────────────────────────
             for bv in euler_borrowable:
                 if bv.get("chain_id", 1) != m_chain:
                     continue
                 borrow_pct = float(bv.get("borrow_apy_pct", 0)) / 100
                 if borrow_pct <= 0:
                     continue
-                
+
                 # Check if this vault accepts a PT matching our market
-                matched_pt = None
-                matched_pt_evault = ""
-                market_expiry = market.get("expiry")
+                matched_pt_col = None
                 for pt_col in bv.get("pt_collaterals", []):
-                    pt_sym = pt_col.get("symbol", "")
-                    if pt_matches_market(pt_sym, m_name, market_expiry):
-                        matched_pt = pt_sym
-                        matched_pt_evault = pt_col.get("evault", "")
+                    if pt_col.get("pt_underlying", "").lower() == mkt_ticker.lower() and pt_col.get("pt_expiry") == mkt_expiry:
+                        matched_pt_col = pt_col
                         break
-                
-                if not matched_pt:
+
+                if not matched_pt_col:
                     continue
-                
-                # Use cash as liquidity proxy (in token units, not USD)
-                euler_liq = float(bv.get("cash", 0))
-                if euler_liq < MIN_BORROW_LIQUIDITY_USD:
-                    continue
-                
+
+                # cash is in token units (not USD) — keep for display, flag via has_liquidity
+                euler_cash_tokens = float(bv.get("cash", 0))
                 ltv = DEFAULT_LTV_FALLBACK
                 leverage = int(1 / (1 - ltv)) if ltv < 1 else 10
                 net = implied - borrow_pct
                 theo_yield = implied + max(net, 0) * (leverage - 1)
+
                 borrow_vault = bv.get("symbol", "?")
-                vault_name = f"Euler {borrow_vault} ({borrow_pct*100:.2f}%) ⟶ {matched_pt}"
-                vault_symbol = borrow_vault
+                vault_name = f"Euler {borrow_vault} ({borrow_pct*100:.2f}%) ⟶ {matched_pt_col.get('symbol', '')}"
                 euler_vault_address = bv.get("evault", "")
-                euler_collateral_address = matched_pt_evault or ""
+                euler_collateral_address = matched_pt_col.get("evault", "") or ""
+
                 candidates.append(_build_candidate(
                     market, theo_yield, borrow_pct, ltv, leverage, days, spread,
-                    "euler", vault_name, borrow_liquidity=euler_liq,
-                    borrow_liquidity_tokens=euler_liq, borrow_token_symbol=vault_symbol,
-                    euler_vault_address=euler_vault_address, euler_collateral_address=euler_collateral_address))
+                    "euler", vault_name,
+                    borrow_liquidity=0,  # cash is in tokens, not USD — flag only
+                    borrow_liquidity_tokens=euler_cash_tokens,
+                    borrow_token_symbol=borrow_vault,
+                    euler_vault_address=euler_vault_address,
+                    euler_collateral_address=euler_collateral_address,
+                    pt_underlying=mkt_ticker,
+                    pt_expiry=mkt_expiry,
+                ))
 
         candidates.sort(key=lambda c: c["theoretical_max_yield"], reverse=True)
         log.info("Found %d loop candidates", len(candidates))
@@ -289,7 +301,6 @@ class LoopScoutAgent:
     # -- Public API --
 
     async def run(self, count: int = 5, chain: str | None = None) -> str:
-        """Run the loop scout with explicit parameters."""
         chain_id = CHAINS.get(chain) if chain else None
         chain_name = chain
 

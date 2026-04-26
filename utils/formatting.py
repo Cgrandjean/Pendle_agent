@@ -1,6 +1,6 @@
 """Telegram output formatting."""
 
-from agents.config import CHAINS
+from agents.config import CHAINS, MIN_BORROW_LIQUIDITY_USD
 
 # Reverse lookup: chain_id -> display name
 CHAIN_NAMES = {}
@@ -143,12 +143,18 @@ def format_candidate(rank, c):
         borrow_liq_tokens = c.get("borrow_liquidity_tokens", 0)
         borrow_sym = c.get("borrow_token_symbol", "")
         
+        # Compute liquidity status (actionnable = meets MIN threshold)
+        has_actionnable_liq = borrow_liq_usd >= MIN_BORROW_LIQUIDITY_USD
+        
         if protocol == "euler" and borrow_liq_tokens > 0 and borrow_sym:
             borrow_info = f" (💧 {fmt_tokens(borrow_liq_tokens, borrow_sym)})"
         elif borrow_liq_usd > 0:
             borrow_info = f" (💧 {fmt_usd(borrow_liq_usd)})"
         else:
             borrow_info = ""
+        
+        if not has_actionnable_liq:
+            borrow_info += " ⚠️"
         
         lines.append(f"   🔁 {vault_name}{borrow_info}")
 
