@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import httpx
@@ -13,7 +14,13 @@ from telegram.ext import (
     CommandHandler,
 )
 
-from agents.config import TELEGRAM_BOT_TOKEN, ALLOWED_CHAT_IDS, SCAN_INTERVAL_MINUTES
+from agents.config import (
+    TELEGRAM_BOT_TOKEN,
+    ALLOWED_CHAT_IDS,
+    SCAN_INTERVAL_MINUTES,
+    WEBHOOK_URL,
+    WEBHOOK_PORT,
+)
 from telegram_bot.handlers import (
     start_handler,
     help_handler,
@@ -100,7 +107,19 @@ def main() -> None:
             logger.info("Scheduled scans disabled (SCAN_INTERVAL_MINUTES=0)")
 
     logger.info("🚀 Pendle Loop Scout bot starting…")
-    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
+
+    if WEBHOOK_URL:
+        # Webhook mode: Telegram pushes updates to us (no outbound polling needed)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=WEBHOOK_PORT,
+            url_path=TELEGRAM_BOT_TOKEN,  # secret path: /<TOKEN>
+            webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}",
+            drop_pending_updates=True,
+        )
+    else:
+        # Polling mode: fallback for local development
+        app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":

@@ -16,3 +16,7 @@ ALLOWED_CHAT_IDS: list[int] = [
 
 DB_PATH: str = os.environ.get("DB_PATH", "data/loop_scout.db")
 SCAN_INTERVAL_MINUTES: int = int(os.environ.get("SCAN_INTERVAL_MINUTES", "10"))
+
+# Webhook config (HF Spaces)
+WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "")  # e.g. https://chgrdj-pendle-loop-bot.hf.space
+WEBHOOK_PORT: int = int(os.environ.get("WEBHOOK_PORT", "7860"))
