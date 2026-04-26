@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from telegram import request
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -42,7 +43,19 @@ def main() -> None:
         )
         sys.exit(1)
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    # Extended timeouts for cold-start / slow network environments (e.g. HF Spaces)
+    http_request = request.HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0,
+    )
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .request(http_request)
+        .build()
+    )
 
     # Command handlers
     app.add_handler(CommandHandler("start", start_handler))
@@ -82,7 +95,7 @@ def main() -> None:
             logger.info("Scheduled scans disabled (SCAN_INTERVAL_MINUTES=0)")
 
     logger.info("🚀 Pendle Loop Scout bot starting…")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, bootstrap_retries=-1)
 
 
 if __name__ == "__main__":
