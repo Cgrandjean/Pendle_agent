@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import sys
 
+import httpx
+
 from telegram import request
 from telegram.ext import (
     ApplicationBuilder,
@@ -43,12 +45,15 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # Extended timeouts for cold-start / slow network environments (e.g. HF Spaces)
+    # Force IPv4 to avoid IPv6 TLS handshake failures on HF Spaces
+    # (api.telegram.org resolves to IPv6 but containers often lack v6 routing)
+    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
     http_request = request.HTTPXRequest(
         connect_timeout=30.0,
         read_timeout=30.0,
         write_timeout=30.0,
         pool_timeout=30.0,
+        httpx_kwargs={"transport": transport},
     )
     app = (
         ApplicationBuilder()
