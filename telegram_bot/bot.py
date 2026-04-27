@@ -116,6 +116,7 @@ def main() -> None:
             url_path=TELEGRAM_BOT_TOKEN,  # secret path: /<TOKEN>
             webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}",
             drop_pending_updates=True,
+            bootstrap_retries=-1,
         )
     else:
         # Polling mode: fallback for local development

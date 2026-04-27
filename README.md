@@ -200,81 +200,68 @@ The `yield_history` table enables moving average calculation for spike detection
 
 ---
 
-## Deploy on Hugging Face Spaces (free)
+## 🚀 Deploy on Fly.io (recommended — free, reliable)
 
-Hugging Face Spaces offers free Docker hosting, perfect for a Telegram bot.
+Fly.io free tier has unrestricted outbound networking. Telegram bot polling works perfectly.
 
-### Step 1: Create the Space
-
-1. Go to [huggingface.co/new-space](https://huggingface.co/new-space)
-2. Choose a name (e.g. `pendle-loop-scout`)
-3. Select **Docker** as SDK
-4. Visibility: **Private** (recommended to protect the token)
-
-### Step 2: Configure secrets
-
-In the Space **Settings** → **Repository secrets**, add:
-
-| Secret | Value | Description |
-|--------|-------|-------------|
-| `TELEGRAM_BOT_TOKEN` | `your_bot_token_here` | Token from @BotFather |
-| `ALLOWED_CHAT_IDS` | `your_chat_id_here` | Your chat ID (via @userinfobot) |
-| `SCAN_INTERVAL_MINUTES` | `10` | Scan frequency (minutes) |
-| `SPIKE_WINDOW` | `30` | Scans for average (30 × 10min = 5h) |
-| `SPIKE_MULTIPLIER` | `1.5` | Spike trigger ratio |
-| `SPIKE_MIN_YIELD` | `0.05` | Minimum yield for spikes (5%) |
-
-### Step 3: Push the code
-
+### 1. Install Fly CLI and login
 ```bash
-# Clone the Space (replace USERNAME and SPACE_NAME)
-git clone https://huggingface.co/spaces/USERNAME/SPACE_NAME
-cd SPACE_NAME
-
-# Copy all bot files
-cp -r /path/to/Pendle_agent/* .
-
-# Commit and push
-git add .
-git commit -m "Initial commit: Pendle Loop Scout"
-git push
+brew install flyctl
+flyctl auth login
 ```
 
-### Step 4: Verify
+### 2. Launch app (first time only)
+```bash
+cd Pendle_agent
+fly launch --no-deploy
+# Follow prompts: app name = pendle-loop-scout, region = cdg (Paris)
+```
 
-- The Space builds automatically
-- Check the **Logs** tab for bot logs
-- Send `/start` on Telegram to test
+### 3. Set secrets
+```bash
+fly secrets set TELEGRAM_BOT_TOKEN=your_token_here
+fly secrets set ALLOWED_CHAT_IDS=123456789
+fly secrets set SCAN_INTERVAL_MINUTES=10
+```
+
+### 4. Create persistent volume (data persists across deploys)
+```bash
+fly volume create pendle_data --size 1
+```
+
+### 5. Deploy
+```bash
+fly deploy
+```
+
+### 6. Check logs
+```bash
+fly logs
+```
+
+### 7. Update after code changes
+```bash
+fly deploy
+```
 
 ---
 
-## Environment variables
+## 🧪 Hugging Face Spaces (legacy — has network restrictions)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | *(required)* | Telegram bot token |
-| `ALLOWED_CHAT_IDS` | *(empty)* | Authorized chat IDs (comma-separated) |
-| `SCAN_INTERVAL_MINUTES` | `10` | Silent scan frequency |
-| `DB_PATH` | `data/loop_scout.db` | SQLite database path |
+⚠️ HF Spaces free tier has restricted outbound access. Telegram polling may fail with `ConnectTimeout`. If that happens, migrate to Fly.io (see above).
 
----
+### Deploy on HF Spaces
+```bash
+git push hf main  # auto-deploys via repo sync
+```
 
-## How to read results
-
-Each displayed opportunity contains:
-
-| Field | Description |
-|-------|-------------|
-| **Implied APY** | Fixed rate of the PT (guaranteed if held to maturity) |
-| **Underlying APY** | Yield of the underlying asset |
-| **Spread** | `implied - underlying` — gross loop margin |
-| **PT Discount** | PT discount to face value |
-| **TVL** | Total Value Locked of the market |
-| **Liquidity** | Available liquidity to buy/sell |
-| **Days to expiry** | Days remaining until PT maturity |
-| **Borrow cost** | Real borrow rate on the cheapest money market |
-| **Yield theo** | Max estimated yield with leverage |
-| **Score** | Composite /100 (spread, TVL, expiry, money market count) |
+### Secrets (in HF Space Settings → Variables and secrets)
+```
+TELEGRAM_BOT_TOKEN=your_token_here
+ALLOWED_CHAT_IDS=123456789
+SCAN_INTERVAL_MINUTES=10
+WEBHOOK_URL=https://your-space.hf.space  # optional, webhook mode
+```
 
 ---
 
@@ -294,6 +281,38 @@ python -m telegram_bot.bot
 # Or run the agent directly (CLI)
 python scripts/run_agent.py [count] [chain]
 ```
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | *(required)* | Telegram bot token |
+| `ALLOWED_CHAT_IDS` | *(empty)* | Authorized chat IDs (comma-separated) |
+| `SCAN_INTERVAL_MINUTES` | `10` | Silent scan frequency |
+| `DB_PATH` | `data/loop_scout.db` | SQLite database path |
+| `WEBHOOK_URL` | *(empty)* | Webhook URL (HF Spaces only, leave empty for polling) |
+| `WEBHOOK_PORT` | `7860` | Webhook port |
+
+---
+
+## How to read results
+
+Each displayed opportunity contains:
+
+| Field | Description |
+|-------|-------------|
+| **Implied APY** | Fixed rate of the PT (guaranteed if held to maturity) |
+| **Underlying APY** | Yield of the underlying asset |
+| **Spread** | `implied - underlying` — gross loop margin |
+| **PT Discount** | PT discount to face value |
+| **TVL** | Total Value Locked of the market |
+| **Liquidity** | Available liquidity to buy/sell |
+| **Days to expiry** | Days remaining until PT maturity |
+| **Borrow cost** | Real borrow rate on the cheapest money market |
+| **Yield theo** | Max estimated yield with leverage |
+| **Score** | Composite /100 (spread, TVL, expiry, money market count) |
 
 ---
 
@@ -330,7 +349,8 @@ Pendle_agent/
 │
 ├── const.py                  # All constants (chains, defaults, help text)
 │
-├── Dockerfile                # Docker image for HF Spaces
+├── Dockerfile                # Docker image (HF Spaces + Fly.io)
+├── fly.toml                  # Fly.io config
 ├── pyproject.toml
 └── README.md
 ```

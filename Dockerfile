@@ -21,8 +21,8 @@ ENV PYTHONPATH=/app
 # Create data directory
 RUN mkdir -p data
 
-# Expose port 7860 (required by HF Spaces)
-EXPOSE 7860
+# Expose port 8080 (Fly.io) — also works for HF Spaces (hf_runner.py starts its own server)
+EXPOSE 8080
 
-# Run the health server + bot
+# Run the bot (hf_runner.py for HF/Fly.io, or run_polling() for local dev)
 CMD ["python", "scripts/hf_runner.py"]
